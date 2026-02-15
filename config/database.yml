@@ -1,0 +1,20 @@
+default: &default
+  adapter: postgresql
+  encoding: unicode
+  pool: <%= ENV.fetch('RAILS_MAX_THREADS', 5) %>
+  host: <%= ENV.fetch('DB_HOST', 'localhost') %>
+  port: <%= ENV.fetch('DB_PORT', 5432) %>
+  username: <%= ENV.fetch('DB_USERNAME', 'postgres') %>
+  password: <%= ENV['DB_PASSWORD'] %>
+
+development:
+  <<: *default
+  database: bid_collections_development
+
+test:
+  <<: *default
+  database: bid_collections_test
+
+production:
+  <<: *default
+  database: <%= ENV.fetch('DB_NAME', 'bid_collections_production') %>
