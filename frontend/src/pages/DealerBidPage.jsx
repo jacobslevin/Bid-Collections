@@ -159,6 +159,9 @@ export default function DealerBidPage() {
       }
 
       const byRowIndex = new Map(rows.map((_row, index) => [String(index), index]))
+      rows.forEach((_row, index) => {
+        byRowIndex.set(String(index + 1), index)
+      })
       const bySpecId = new Map()
       const byCodeTag = new Map()
       rows.forEach((row, index) => {
@@ -181,6 +184,7 @@ export default function DealerBidPage() {
         for (let i = 1; i < lines.length; i += 1) {
           const cols = parseCsvLine(lines[i])
           const rowIndexRaw = idxRow >= 0 ? String(cols[idxRow] || '').trim() : ''
+          const rowIndexNorm = normalizeNumericLike(rowIndexRaw)
           const specIdRaw = idxSpec >= 0 ? String(cols[idxSpec] || '') : ''
           const specIdNorm = normalizeKey(specIdRaw)
           const specIdNum = normalizeNumericLike(specIdRaw)
@@ -189,11 +193,13 @@ export default function DealerBidPage() {
 
           const rowIndex =
             byRowIndex.get(rowIndexRaw) ??
+            byRowIndex.get(rowIndexNorm) ??
             bySpecId.get(specIdRaw) ??
             bySpecId.get(specIdNorm) ??
             bySpecId.get(specIdNum) ??
             byCodeTag.get(codeTagRaw) ??
-            byCodeTag.get(codeTagNorm)
+            byCodeTag.get(codeTagNorm) ??
+            (i - 1 < next.length ? (i - 1) : null)
 
           if (rowIndex == null) continue
 
