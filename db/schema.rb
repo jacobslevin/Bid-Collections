@@ -11,10 +11,7 @@
 # It's strongly recommended that you check this file into your version control system.
 
 ActiveRecord::Schema[7.1].define(version: 2026_02_15_120000) do
-  # These are extensions that must be enabled in order to support this database
-  enable_extension "plpgsql"
-
-  create_table "bid_line_items", force: :cascade do |t|
+  create_table "bid_line_items", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "bid_id", null: false
     t.bigint "spec_item_id", null: false
     t.decimal "unit_price", precision: 12, scale: 4
@@ -28,7 +25,7 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_15_120000) do
     t.index ["spec_item_id"], name: "index_bid_line_items_on_spec_item_id"
   end
 
-  create_table "bid_packages", force: :cascade do |t|
+  create_table "bid_packages", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "project_id", null: false
     t.string "name", null: false
     t.string "source_filename", null: false
@@ -39,12 +36,12 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_15_120000) do
     t.index ["project_id"], name: "index_bid_packages_on_project_id"
   end
 
-  create_table "bid_submission_versions", force: :cascade do |t|
+  create_table "bid_submission_versions", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "bid_id", null: false
     t.integer "version_number", null: false
     t.datetime "submitted_at", null: false
     t.decimal "total_amount", precision: 14, scale: 2
-    t.jsonb "line_items_snapshot", default: [], null: false
+    t.json "line_items_snapshot", null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.index ["bid_id", "submitted_at"], name: "index_bid_submission_versions_on_bid_id_and_submitted_at"
@@ -52,7 +49,7 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_15_120000) do
     t.index ["bid_id"], name: "index_bid_submission_versions_on_bid_id"
   end
 
-  create_table "bids", force: :cascade do |t|
+  create_table "bids", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "invite_id", null: false
     t.integer "state", default: 0, null: false
     t.datetime "submitted_at"
@@ -64,7 +61,7 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_15_120000) do
     t.index ["state"], name: "index_bids_on_state"
   end
 
-  create_table "invites", force: :cascade do |t|
+  create_table "invites", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "bid_package_id", null: false
     t.string "dealer_name", null: false
     t.string "dealer_email"
@@ -79,14 +76,14 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_15_120000) do
     t.index ["token"], name: "index_invites_on_token", unique: true
   end
 
-  create_table "projects", force: :cascade do |t|
+  create_table "projects", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.string "name", null: false
     t.text "description"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
   end
 
-  create_table "spec_items", force: :cascade do |t|
+  create_table "spec_items", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "bid_package_id", null: false
     t.string "spec_item_id", null: false
     t.string "category", null: false
