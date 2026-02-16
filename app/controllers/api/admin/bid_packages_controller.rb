@@ -2,13 +2,15 @@ module Api
   module Admin
     class BidPackagesController < Api::BaseController
       def index
-        bid_packages = BidPackage.order(created_at: :desc).limit(200)
+        bid_packages = BidPackage.includes(:project).order(created_at: :desc).limit(200)
 
         render json: {
           bid_packages: bid_packages.map do |bid_package|
             {
               id: bid_package.id,
-              name: bid_package.name
+              name: bid_package.name,
+              project_id: bid_package.project_id,
+              project_name: bid_package.project&.name
             }
           end
         }
@@ -63,6 +65,13 @@ module Api
         else
           render_unprocessable!(result.errors)
         end
+      end
+
+      def destroy
+        bid_package = BidPackage.find(params[:id])
+        bid_package.destroy!
+
+        render json: { deleted: true, bid_package_id: bid_package.id }
       end
     end
   end

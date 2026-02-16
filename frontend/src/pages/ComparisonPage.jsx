@@ -2,6 +2,11 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import SectionCard from '../components/SectionCard'
 import { comparisonExportUrl, fetchBidPackages, fetchComparison } from '../lib/api'
 
+const usdFormatter = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2
+})
+
 function numberOrNull(value) {
   if (value == null || value === '') return null
   const parsed = Number(value)
@@ -10,7 +15,7 @@ function numberOrNull(value) {
 
 function money(value) {
   const n = numberOrNull(value)
-  return n == null ? '—' : `$${n.toFixed(2)}`
+  return n == null ? '—' : `$${usdFormatter.format(n)}`
 }
 
 function extendedAmount(unitPrice, quantity) {
@@ -186,7 +191,9 @@ export default function ComparisonPage() {
             >
               {bidPackages.length === 0 ? <option value="">No bid packages yet</option> : null}
               {bidPackages.map((pkg) => (
-                <option key={pkg.id} value={pkg.id}>{pkg.name} (#{pkg.id})</option>
+                <option key={pkg.id} value={pkg.id}>
+                  {pkg.name} in {pkg.project_name || 'Unknown Project'} (Bid Package ID: {pkg.id}, Project ID: {pkg.project_id ?? '—'})
+                </option>
               ))}
             </select>
           </label>
@@ -261,12 +268,16 @@ export default function ComparisonPage() {
                   Avg Unit Price{sortIndicator('avg_unit_price')}
                 </button>
               </th>
+              <th>Avg Extended</th>
               {visibleDealers.map((dealer) => (
                 <Fragment key={dealer.invite_id}>
                   <th className="dealer-block-start">
                     <button className="th-sort-btn" onClick={() => cycleSort('dealer_price', dealer.invite_id)}>
                       {dealer.dealer_name || 'Dealer'}{sortIndicator('dealer_price', dealer.invite_id)}
                     </button>
+                  </th>
+                  <th>
+                    {dealer.dealer_name || 'Dealer'} Extended
                   </th>
                   <th className="dealer-block-end">
                     <button className="th-sort-btn" onClick={() => cycleSort('dealer_delta', dealer.invite_id)}>
@@ -284,6 +295,7 @@ export default function ComparisonPage() {
                 <td>{row.product_name || '—'}</td>
                 <td>{row.quantity || '—'} {row.uom || ''}</td>
                 <td>{money(row.avg_unit_price)}</td>
+                <td>{money(extendedAmount(row.avg_unit_price, row.quantity))}</td>
                 {(row.dealers || [])
                   .filter((cell) => visibleDealerIds.includes(cell.invite_id))
                   .flatMap((cell) => {
@@ -295,6 +307,9 @@ export default function ComparisonPage() {
                     >
                       {money(cell.unit_price)}
                     </td>,
+                    <td key={`${row.spec_item_id}-${cell.invite_id}-extended`}>
+                      {money(extendedAmount(cell.unit_price, row.quantity))}
+                    </td>,
                     <td key={`${row.spec_item_id}-${cell.invite_id}-delta`} className="dealer-block-end">
                       {delta(cell.unit_price, row.avg_unit_price)}
                     </td>
@@ -304,7 +319,7 @@ export default function ComparisonPage() {
             ))}
             {sortedRows.length === 0 ? (
               <tr>
-                <td colSpan={4 + (visibleDealers.length * 2)} className="text-muted">No comparison rows loaded yet.</td>
+                <td colSpan={5 + (visibleDealers.length * 3)} className="text-muted">No comparison rows loaded yet.</td>
               </tr>
             ) : null}
           </tbody>
@@ -312,13 +327,15 @@ export default function ComparisonPage() {
             <tfoot>
               <tr className="total-row">
                 <td colSpan={3}><strong>Total Bid Amount</strong></td>
+                <td><strong>—</strong></td>
                 <td><strong>{money(avgTotal)}</strong></td>
                 {visibleDealers.map((dealer) => {
                   const total = dealerTotalsById[dealer.invite_id]
                   const isBest = total === bestDealerTotal
                   return (
                     <Fragment key={`total-${dealer.invite_id}`}>
-                      <td className={`dealer-block-start ${isBest ? 'best' : ''}`.trim()}><strong>{money(total)}</strong></td>
+                      <td className={`dealer-block-start ${isBest ? 'best' : ''}`.trim()}><strong>—</strong></td>
+                      <td className={isBest ? 'best' : ''}><strong>{money(total)}</strong></td>
                       <td className="dealer-block-end"><strong>{delta(total, avgTotal)}</strong></td>
                     </Fragment>
                   )

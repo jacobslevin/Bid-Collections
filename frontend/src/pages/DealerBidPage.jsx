@@ -3,11 +3,96 @@ import { useParams } from 'react-router-dom'
 import SectionCard from '../components/SectionCard'
 import { fetchDealerBid, saveDealerBid, submitDealerBid } from '../lib/api'
 
+const usdFormatter = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2
+})
+
 function formatTimestamp(value) {
   if (!value) return '—'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString()
+}
+
+function parseCsvLine(line) {
+  const cells = []
+  let current = ''
+  let inQuotes = false
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i]
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"'
+        i += 1
+      } else {
+        inQuotes = !inQuotes
+      }
+    } else if (ch === ',' && !inQuotes) {
+      cells.push(current)
+      current = ''
+    } else {
+      current += ch
+    }
+  }
+  cells.push(current)
+  return cells.map((c) => c.trim())
+}
+
+function escapeCsv(value) {
+  const raw = value == null ? '' : String(value)
+  if (raw.includes('"') || raw.includes(',') || raw.includes('\n')) {
+    return `"${raw.replaceAll('"', '""')}"`
+  }
+  return raw
+}
+
+function normalizeHeader(header) {
+  return String(header || '')
+    .replace(/^\uFEFF/, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+}
+
+function findHeaderIndex(headers, aliases) {
+  for (let i = 0; i < headers.length; i += 1) {
+    if (aliases.includes(headers[i])) return i
+  }
+  return -1
+}
+
+function normalizeKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+}
+
+function normalizeNumericLike(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return raw
+  if (Number.isInteger(n)) return String(n)
+  return String(n)
+}
+
+function numberOrNull(value) {
+  if (value == null || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function money(value) {
+  const n = numberOrNull(value)
+  return n == null ? '—' : `$${usdFormatter.format(n)}`
+}
+
+function extendedAmount(unitPrice, quantity) {
+  const p = numberOrNull(unitPrice)
+  const q = numberOrNull(quantity)
+  if (p == null || q == null) return null
+  return p * q
 }
 
 export default function DealerBidPage() {
@@ -19,6 +104,121 @@ export default function DealerBidPage() {
   const [lastSavedAt, setLastSavedAt] = useState(null)
   const [statusMessage, setStatusMessage] = useState('Loading bid...')
   const [loading, setLoading] = useState(false)
+
+  const downloadCsvTemplate = () => {
+    const headers = ['row_index', 'spec_item_id', 'code_tag', 'product_name', 'quantity', 'uom', 'unit_price', 'lead_time_days', 'dealer_notes']
+    const lines = [
+      headers.join(','),
+      ...rows.map((row, index) => ([
+        index,
+        row.spec_item_id,
+        row.sku || '',
+        row.product_name || '',
+        row.quantity ?? '',
+        row.uom || '',
+        row.unit_price ?? '',
+        row.lead_time_days ?? '',
+        row.dealer_notes ?? ''
+      ].map(escapeCsv).join(',')))
+    ]
+
+    const blob = new Blob([`${lines.join('\n')}\n`], { type: 'text/csv;charset=utf-8' })
+    const href = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = href
+    a.download = `dealer_bid_${token}.csv`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(href)
+  }
+
+  const importCsvFile = async (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    try {
+      const text = await file.text()
+      const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0)
+      if (lines.length < 2) {
+        setStatusMessage('CSV import failed: no data rows found.')
+        return
+      }
+
+      const headers = parseCsvLine(lines[0]).map(normalizeHeader)
+      const idxRow = findHeaderIndex(headers, ['rowindex', 'row', 'lineindex'])
+      const idxSpec = findHeaderIndex(headers, ['specitemid', 'productid', 'specid', 'itemid'])
+      const idxCode = findHeaderIndex(headers, ['codetag', 'code', 'sku'])
+      const idxUnit = findHeaderIndex(headers, ['unitprice', 'price', 'dealerunitprice'])
+      const idxLead = findHeaderIndex(headers, ['leadtimedays', 'leadtime', 'leadtimeindays'])
+      const idxNotes = findHeaderIndex(headers, ['dealernotes', 'notes', 'bidnotes'])
+
+      if ((idxRow < 0 && idxSpec < 0 && idxCode < 0) || idxUnit < 0 || idxLead < 0 || idxNotes < 0) {
+        setStatusMessage('CSV import failed: include row_index or spec_item_id or code/tag, plus unit price, lead time days, and dealer notes.')
+        return
+      }
+
+      const byRowIndex = new Map(rows.map((_row, index) => [String(index), index]))
+      const bySpecId = new Map()
+      const byCodeTag = new Map()
+      rows.forEach((row, index) => {
+        const specRaw = String(row.spec_item_id || '')
+        const specNorm = normalizeKey(specRaw)
+        const specNum = normalizeNumericLike(specRaw)
+        const codeRaw = String(row.sku || '')
+        const codeNorm = normalizeKey(codeRaw)
+
+        if (specRaw) bySpecId.set(specRaw, index)
+        if (specNorm) bySpecId.set(specNorm, index)
+        if (specNum) bySpecId.set(specNum, index)
+        if (codeRaw) byCodeTag.set(codeRaw, index)
+        if (codeNorm) byCodeTag.set(codeNorm, index)
+      })
+      let updatedCount = 0
+
+      setRows((prev) => {
+        const next = [...prev]
+        for (let i = 1; i < lines.length; i += 1) {
+          const cols = parseCsvLine(lines[i])
+          const rowIndexRaw = idxRow >= 0 ? String(cols[idxRow] || '').trim() : ''
+          const specIdRaw = idxSpec >= 0 ? String(cols[idxSpec] || '') : ''
+          const specIdNorm = normalizeKey(specIdRaw)
+          const specIdNum = normalizeNumericLike(specIdRaw)
+          const codeTagRaw = idxCode >= 0 ? String(cols[idxCode] || '') : ''
+          const codeTagNorm = normalizeKey(codeTagRaw)
+
+          const rowIndex =
+            byRowIndex.get(rowIndexRaw) ??
+            bySpecId.get(specIdRaw) ??
+            bySpecId.get(specIdNorm) ??
+            bySpecId.get(specIdNum) ??
+            byCodeTag.get(codeTagRaw) ??
+            byCodeTag.get(codeTagNorm)
+
+          if (rowIndex == null) continue
+
+          next[rowIndex] = {
+            ...next[rowIndex],
+            unit_price: cols[idxUnit] ?? '',
+            lead_time_days: cols[idxLead] ?? '',
+            dealer_notes: cols[idxNotes] ?? ''
+          }
+          updatedCount += 1
+        }
+        return next
+      })
+
+      if (updatedCount === 0) {
+        setStatusMessage('CSV imported, but 0 rows matched your current bid items. Check spec_item_id or code/tag values.')
+      } else {
+        setStatusMessage(`CSV imported. Updated ${updatedCount} rows. Click Save Draft to persist.`)
+      }
+    } catch (_error) {
+      setStatusMessage('CSV import failed: unable to read file.')
+    } finally {
+      event.target.value = ''
+    }
+  }
 
   useEffect(() => {
     let active = true
@@ -126,7 +326,24 @@ export default function DealerBidPage() {
         <p className="text-muted">{statusMessage}</p>
       </SectionCard>
 
-      <SectionCard title="Line Items">
+      <SectionCard
+        title="Line Items"
+        actions={
+          <div className="action-row">
+            <button className="btn" onClick={downloadCsvTemplate}>Download CSV</button>
+            <label className={`btn ${bidState === 'submitted' ? 'btn-disabled' : ''}`}>
+              Import CSV
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={importCsvFile}
+                style={{ display: 'none' }}
+                disabled={bidState === 'submitted'}
+              />
+            </label>
+          </div>
+        }
+      >
         <table className="table dense">
           <thead>
             <tr>
@@ -134,6 +351,7 @@ export default function DealerBidPage() {
               <th>Product</th>
               <th>Qty/UOM</th>
               <th>Unit Price</th>
+              <th>Extended Price</th>
               <th>Lead Time (days)</th>
               <th>Dealer Notes</th>
             </tr>
@@ -151,6 +369,7 @@ export default function DealerBidPage() {
                     disabled={bidState === 'submitted'}
                   />
                 </td>
+                <td>{money(extendedAmount(row.unit_price, row.quantity))}</td>
                 <td>
                   <input
                     value={row.lead_time_days ?? ''}
@@ -169,7 +388,7 @@ export default function DealerBidPage() {
             ))}
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={6} className="text-muted">No line items loaded.</td>
+                <td colSpan={7} className="text-muted">No line items loaded.</td>
               </tr>
             ) : null}
           </tbody>

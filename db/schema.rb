@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.1].define(version: 2026_02_14_110500) do
+ActiveRecord::Schema[7.1].define(version: 2026_02_15_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "plpgsql"
 
@@ -39,12 +39,27 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_14_110500) do
     t.index ["project_id"], name: "index_bid_packages_on_project_id"
   end
 
+  create_table "bid_submission_versions", force: :cascade do |t|
+    t.bigint "bid_id", null: false
+    t.integer "version_number", null: false
+    t.datetime "submitted_at", null: false
+    t.decimal "total_amount", precision: 14, scale: 2
+    t.jsonb "line_items_snapshot", default: [], null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["bid_id", "submitted_at"], name: "index_bid_submission_versions_on_bid_id_and_submitted_at"
+    t.index ["bid_id", "version_number"], name: "index_bid_submission_versions_on_bid_id_and_version_number", unique: true
+    t.index ["bid_id"], name: "index_bid_submission_versions_on_bid_id"
+  end
+
   create_table "bids", force: :cascade do |t|
     t.bigint "invite_id", null: false
     t.integer "state", default: 0, null: false
     t.datetime "submitted_at"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.datetime "last_reopened_at"
+    t.string "last_reopen_reason"
     t.index ["invite_id"], name: "index_bids_on_invite_id", unique: true
     t.index ["state"], name: "index_bids_on_state"
   end
@@ -58,6 +73,7 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_14_110500) do
     t.datetime "last_unlocked_at"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.string "password_plaintext"
     t.index ["bid_package_id", "dealer_name"], name: "index_invites_on_bid_package_id_and_dealer_name"
     t.index ["bid_package_id"], name: "index_invites_on_bid_package_id"
     t.index ["token"], name: "index_invites_on_token", unique: true
@@ -100,6 +116,7 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_14_110500) do
   add_foreign_key "bid_line_items", "bids"
   add_foreign_key "bid_line_items", "spec_items"
   add_foreign_key "bid_packages", "projects"
+  add_foreign_key "bid_submission_versions", "bids"
   add_foreign_key "bids", "invites"
   add_foreign_key "invites", "bid_packages"
   add_foreign_key "spec_items", "bid_packages"

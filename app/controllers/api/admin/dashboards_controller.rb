@@ -2,18 +2,22 @@ module Api
   module Admin
     class DashboardsController < Api::BaseController
       def show
-        bid_package = BidPackage.includes(invites: :bid).find(params[:bid_package_id])
+        bid_package = BidPackage.includes(invites: { bid: :bid_submission_versions }).find(params[:bid_package_id])
 
         rows = bid_package.invites.map do |invite|
           bid = invite.bid
+          latest_version = bid&.bid_submission_versions&.maximum(:version_number) || 0
 
           {
             invite_id: invite.id,
             dealer_name: invite.dealer_name,
             dealer_email: invite.dealer_email,
+            invite_password: invite.password_plaintext,
             status: dashboard_status_for(bid),
+            current_version: latest_version,
             last_saved_at: bid&.updated_at,
             submitted_at: bid&.submitted_at,
+            last_reopened_at: bid&.last_reopened_at,
             invite_url: "/invite/#{invite.token}"
           }
         end

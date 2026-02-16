@@ -52,6 +52,7 @@ RSpec.describe 'Dealer Bid Flow API', type: :request do
          headers: { 'CONTENT_TYPE' => 'application/json' }
 
     expect(response).to have_http_status(:ok)
+    expect(invite.reload.bid.bid_submission_versions.count).to eq(1)
 
     put "/api/invites/#{invite.token}/bid",
         params: {

@@ -1,7 +1,7 @@
 Rails.application.routes.draw do
   namespace :api, defaults: { format: :json } do
     scope module: :admin do
-      resources :projects, only: [:create]
+      resources :projects, only: [:index, :create, :destroy]
 
       resources :projects, only: [] do
         resources :bid_packages, only: [:create] do
@@ -11,8 +11,14 @@ Rails.application.routes.draw do
         end
       end
 
-      resources :bid_packages, only: [:index] do
-        resources :invites, only: [:create]
+      resources :bid_packages, only: [:index, :destroy] do
+        resources :invites, only: [:create, :destroy] do
+          member do
+            get :history
+            post :reopen
+            patch :password
+          end
+        end
         get :dashboard, to: 'dashboards#show'
         get :comparison, to: 'comparisons#show'
         get :export, to: 'exports#show', defaults: { format: :csv }

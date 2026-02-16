@@ -53,7 +53,11 @@ module Api
           return render json: { error: 'Bid already submitted' }, status: :conflict
         end
 
-        @bid.update!(state: :submitted, submitted_at: Time.current)
+        ActiveRecord::Base.transaction do
+          @bid.update!(state: :submitted, submitted_at: Time.current)
+          @bid.create_submission_version!
+        end
+
         render json: { submitted: true, submitted_at: @bid.submitted_at }
       end
 

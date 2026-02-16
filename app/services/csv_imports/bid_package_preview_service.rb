@@ -17,7 +17,7 @@ module CsvImports
       'product_name' => ['product_name', 'Product Name'],
       'sku' => ['sku', 'Code'],
       'description' => ['description', 'Description'],
-      'quantity' => ['quantity', 'Quantity'],
+      'quantity' => ['quantity', 'Quantity', 'Qty'],
       'uom' => ['uom', 'Unit of Measure'],
       'finish' => ['finish'],
       'color' => ['color'],
@@ -126,7 +126,6 @@ module CsvImports
 
       row['quantity'] = '1' if row['quantity'].blank?
       row['uom'] = 'EA' if row['uom'].blank?
-      row['sku'] = row['spec_item_id'] if row['sku'].blank?
       row['product_name'] = "Product #{row['spec_item_id']}" if row['product_name'].blank? && row['spec_item_id'].present?
       row['manufacturer'] = 'Unknown' if row['manufacturer'].blank?
       row['category'] = 'Uncategorized' if row['category'].blank?

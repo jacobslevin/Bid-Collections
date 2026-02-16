@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import SectionCard from '../components/SectionCard'
-import { createBidPackage, createProject, previewBidPackage } from '../lib/api'
+import { createBidPackage, fetchProjects, previewBidPackage } from '../lib/api'
 
 function formatDateStamp() {
   const now = new Date()
@@ -21,7 +21,9 @@ function readFileText(file) {
 
 export default function ImportPage() {
   const [packageName, setPackageName] = useState(`Spec Import ${formatDateStamp()}`)
-  const [internalProjectId, setInternalProjectId] = useState('')
+  const [projects, setProjects] = useState([])
+  const [selectedProjectId, setSelectedProjectId] = useState('')
+  const [loadingProjects, setLoadingProjects] = useState(false)
 
   const [selectedFile, setSelectedFile] = useState(null)
   const [csvContent, setCsvContent] = useState('')
@@ -33,10 +35,30 @@ export default function ImportPage() {
   const [statusMessage, setStatusMessage] = useState('')
   const [loading, setLoading] = useState(false)
 
-  const canPreview = useMemo(() => csvContent, [csvContent])
+  useEffect(() => {
+    const loadProjects = async () => {
+      setLoadingProjects(true)
+      try {
+        const data = await fetchProjects()
+        const list = data.projects || []
+        setProjects(list)
+        if (list.length > 0) {
+          setSelectedProjectId(String(list[0].id))
+        }
+      } catch (error) {
+        setStatusMessage(error.message)
+      } finally {
+        setLoadingProjects(false)
+      }
+    }
+
+    loadProjects()
+  }, [])
+
+  const canPreview = useMemo(() => csvContent && selectedProjectId, [csvContent, selectedProjectId])
   const canCreate = useMemo(
-    () => canPreview && previewResult?.valid && packageName,
-    [canPreview, previewResult, packageName]
+    () => canPreview && previewResult?.valid && packageName && selectedProjectId,
+    [canPreview, previewResult, packageName, selectedProjectId]
   )
 
   const handleFilePick = async (event) => {
@@ -58,24 +80,6 @@ export default function ImportPage() {
     }
   }
 
-  const ensureInternalProjectId = async () => {
-    if (internalProjectId) return internalProjectId
-
-    try {
-      setStatusMessage('Preparing bid package...')
-      const result = await createProject({
-        name: packageName || `Bid Package ${formatDateStamp()}`,
-        description: 'Auto-created backing container for bid package'
-      })
-      const id = String(result.project.id)
-      setInternalProjectId(id)
-      return id
-    } catch (error) {
-      setStatusMessage(error.message)
-      throw error
-    }
-  }
-
   const handlePreview = async () => {
     if (!canPreview) return
 
@@ -84,9 +88,8 @@ export default function ImportPage() {
     setCreateResult(null)
 
     try {
-      const projectId = await ensureInternalProjectId()
       const result = await previewBidPackage({
-        projectId,
+        projectId: selectedProjectId,
         csvContent,
         sourceProfile: 'designer_pages'
       })
@@ -111,9 +114,8 @@ export default function ImportPage() {
     setStatusMessage('Creating bid package...')
 
     try {
-      const projectId = await ensureInternalProjectId()
       const result = await createBidPackage({
-        projectId,
+        projectId: selectedProjectId,
         name: packageName,
         sourceFilename: selectedFile.name,
         csvContent,
@@ -132,6 +134,19 @@ export default function ImportPage() {
     <div className="stack">
       <SectionCard title="Import Bid Package">
         <div className="form-grid">
+          <label>
+            Project Name
+            <select
+              value={selectedProjectId}
+              onChange={(event) => setSelectedProjectId(event.target.value)}
+              disabled={loadingProjects}
+            >
+              {projects.length === 0 ? <option value="">No projects yet</option> : null}
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>{project.name}</option>
+              ))}
+            </select>
+          </label>
           <label>
             Bid Package Name
             <input value={packageName} onChange={(event) => setPackageName(event.target.value)} placeholder="Furniture Package A" />

@@ -34,6 +34,16 @@ export async function createProject(payload) {
   })
 }
 
+export async function fetchProjects() {
+  return request('/api/projects')
+}
+
+export async function deleteProject(projectId) {
+  return request(`/api/projects/${projectId}`, {
+    method: 'DELETE'
+  })
+}
+
 export async function previewBidPackage({ projectId, csvContent, sourceProfile }) {
   return request(`/api/projects/${projectId}/bid_packages/preview`, {
     method: 'POST',
@@ -61,6 +71,12 @@ export async function fetchBidPackages() {
   return request('/api/bid_packages')
 }
 
+export async function deleteBidPackage(bidPackageId) {
+  return request(`/api/bid_packages/${bidPackageId}`, {
+    method: 'DELETE'
+  })
+}
+
 export async function createInvite({ bidPackageId, dealerName, dealerEmail, password }) {
   return request(`/api/bid_packages/${bidPackageId}/invites`, {
     method: 'POST',
@@ -72,6 +88,30 @@ export async function createInvite({ bidPackageId, dealerName, dealerEmail, pass
         password_confirmation: password
       }
     })
+  })
+}
+
+export async function deleteInvite({ bidPackageId, inviteId }) {
+  return request(`/api/bid_packages/${bidPackageId}/invites/${inviteId}`, {
+    method: 'DELETE'
+  })
+}
+
+export async function fetchInviteHistory({ bidPackageId, inviteId }) {
+  return request(`/api/bid_packages/${bidPackageId}/invites/${inviteId}/history`)
+}
+
+export async function reopenInviteBid({ bidPackageId, inviteId, reason }) {
+  return request(`/api/bid_packages/${bidPackageId}/invites/${inviteId}/reopen`, {
+    method: 'POST',
+    body: JSON.stringify({ reason })
+  })
+}
+
+export async function updateInvitePassword({ bidPackageId, inviteId, password }) {
+  return request(`/api/bid_packages/${bidPackageId}/invites/${inviteId}/password`, {
+    method: 'PATCH',
+    body: JSON.stringify({ password })
   })
 }
 

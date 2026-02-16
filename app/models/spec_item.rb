@@ -4,7 +4,7 @@ class SpecItem < ApplicationRecord
   has_many :bid_line_items, dependent: :destroy
 
   validates :spec_item_id, :category, :manufacturer, :product_name,
-            :sku, :quantity, :uom, presence: true
+            :quantity, :uom, presence: true
   validates :quantity, numericality: { greater_than: 0 }
   validates :spec_item_id, uniqueness: { scope: :bid_package_id }
 end
