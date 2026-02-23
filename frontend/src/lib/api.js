@@ -138,10 +138,10 @@ export async function fetchDealerBid(token) {
   return request(`/api/invites/${token}/bid`)
 }
 
-export async function saveDealerBid(token, lineItems) {
+export async function saveDealerBid(token, lineItems, pricing = {}) {
   return request(`/api/invites/${token}/bid`, {
     method: 'PUT',
-    body: JSON.stringify({ line_items: lineItems })
+    body: JSON.stringify({ line_items: lineItems, pricing })
   })
 }
 

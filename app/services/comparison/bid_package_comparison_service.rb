@@ -6,19 +6,29 @@ module Comparison
 
     def call
       submitted_bids = @bid_package.invites.includes(bid: :bid_line_items).map(&:bid).compact.select(&:submitted?)
-      dealers = submitted_bids.map { |b| { invite_id: b.invite_id, dealer_name: b.invite.dealer_name } }
+      dealers = submitted_bids.map do |b|
+        {
+          invite_id: b.invite_id,
+          dealer_name: b.invite.dealer_name,
+          delivery_amount: b.delivery_amount,
+          install_amount: b.install_amount,
+          escalation_amount: b.escalation_amount,
+          contingency_amount: b.contingency_amount,
+          sales_tax_amount: b.sales_tax_amount
+        }
+      end
 
       rows = @bid_package.spec_items.order(:id).map do |spec_item|
         line_prices = submitted_bids.filter_map do |bid|
           line = bid.bid_line_items.find { |li| li.spec_item_id == spec_item.id }
-          line&.unit_price
+          line&.unit_net_price
         end
 
         avg = line_prices.any? ? (line_prices.sum / line_prices.size).to_d.round(4) : nil
 
         dealer_cells = submitted_bids.map do |bid|
           line = bid.bid_line_items.find { |li| li.spec_item_id == spec_item.id }
-          price = line&.unit_price
+          price = line&.unit_net_price
           {
             invite_id: bid.invite_id,
             unit_price: price,

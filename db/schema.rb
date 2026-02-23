@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.1].define(version: 2026_02_15_120000) do
+ActiveRecord::Schema[7.1].define(version: 2026_02_23_164500) do
   create_table "bid_line_items", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "bid_id", null: false
     t.bigint "spec_item_id", null: false
@@ -19,6 +19,8 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_15_120000) do
     t.text "dealer_notes"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.decimal "discount_percent", precision: 6, scale: 3
+    t.decimal "tariff_percent", precision: 6, scale: 3
     t.index ["bid_id", "spec_item_id"], name: "index_bid_line_items_on_bid_id_and_spec_item_id", unique: true
     t.index ["bid_id"], name: "index_bid_line_items_on_bid_id"
     t.index ["spec_item_id", "unit_price"], name: "index_bid_line_items_on_spec_item_id_and_unit_price"
@@ -57,6 +59,11 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_15_120000) do
     t.datetime "updated_at", null: false
     t.datetime "last_reopened_at"
     t.string "last_reopen_reason"
+    t.decimal "delivery_amount", precision: 14, scale: 2
+    t.decimal "install_amount", precision: 14, scale: 2
+    t.decimal "escalation_amount", precision: 14, scale: 2
+    t.decimal "sales_tax_amount", precision: 14, scale: 2
+    t.decimal "contingency_amount", precision: 14, scale: 2
     t.index ["invite_id"], name: "index_bids_on_invite_id", unique: true
     t.index ["state"], name: "index_bids_on_state"
   end

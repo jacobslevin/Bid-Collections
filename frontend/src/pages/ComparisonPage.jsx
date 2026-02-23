@@ -86,18 +86,32 @@ export default function ComparisonPage() {
     }
   }
 
-  const avgTotal = (data.rows || []).reduce((sum, row) => {
+  const avgSubtotal = (data.rows || []).reduce((sum, row) => {
     const value = extendedAmount(row.avg_unit_price, row.quantity)
     return value == null ? sum : sum + value
   }, 0)
 
-  const dealerTotalsById = (data.dealers || []).reduce((acc, dealer) => {
-    const total = (data.rows || []).reduce((sum, row) => {
+  const dealerSummaryById = (data.dealers || []).reduce((acc, dealer) => {
+    const subtotal = (data.rows || []).reduce((sum, row) => {
       const cell = (row.dealers || []).find((d) => d.invite_id === dealer.invite_id)
       const value = extendedAmount(cell?.unit_price, row.quantity)
       return value == null ? sum : sum + value
     }, 0)
-    acc[dealer.invite_id] = total
+    const delivery = numberOrNull(dealer.delivery_amount) ?? 0
+    const install = numberOrNull(dealer.install_amount) ?? 0
+    const escalation = numberOrNull(dealer.escalation_amount) ?? 0
+    const contingency = numberOrNull(dealer.contingency_amount) ?? 0
+    const salesTax = numberOrNull(dealer.sales_tax_amount) ?? 0
+    const total = subtotal + delivery + install + escalation + contingency + salesTax
+    acc[dealer.invite_id] = {
+      subtotal,
+      delivery,
+      install,
+      escalation,
+      contingency,
+      salesTax,
+      total
+    }
     return acc
   }, {})
 
@@ -108,8 +122,8 @@ export default function ComparisonPage() {
   }
 
   const sortedDealers = [...(data.dealers || [])].sort((a, b) => {
-    const totalA = dealerTotalsById[a.invite_id] || 0
-    const totalB = dealerTotalsById[b.invite_id] || 0
+    const totalA = dealerSummaryById[a.invite_id]?.total || 0
+    const totalB = dealerSummaryById[b.invite_id]?.total || 0
 
     if (responderSort === 'highest_bid') return totalB - totalA
     if (responderSort === 'dealer_name') return (a.dealer_name || '').localeCompare(b.dealer_name || '')
@@ -117,7 +131,22 @@ export default function ComparisonPage() {
   })
 
   const visibleDealers = sortedDealers.filter((dealer) => visibleDealerIds.includes(dealer.invite_id))
-  const visibleTotals = visibleDealers.map((dealer) => dealerTotalsById[dealer.invite_id]).filter((v) => Number.isFinite(v))
+  const visibleSubtotals = visibleDealers.map((dealer) => dealerSummaryById[dealer.invite_id]?.subtotal).filter((v) => Number.isFinite(v))
+  const visibleDeliveries = visibleDealers.map((dealer) => dealerSummaryById[dealer.invite_id]?.delivery).filter((v) => Number.isFinite(v))
+  const visibleInstalls = visibleDealers.map((dealer) => dealerSummaryById[dealer.invite_id]?.install).filter((v) => Number.isFinite(v))
+  const visibleEscalations = visibleDealers.map((dealer) => dealerSummaryById[dealer.invite_id]?.escalation).filter((v) => Number.isFinite(v))
+  const visibleContingencies = visibleDealers.map((dealer) => dealerSummaryById[dealer.invite_id]?.contingency).filter((v) => Number.isFinite(v))
+  const visibleSalesTaxes = visibleDealers.map((dealer) => dealerSummaryById[dealer.invite_id]?.salesTax).filter((v) => Number.isFinite(v))
+  const visibleTotals = visibleDealers.map((dealer) => dealerSummaryById[dealer.invite_id]?.total).filter((v) => Number.isFinite(v))
+
+  const avgDelivery = visibleDeliveries.length > 0 ? (visibleDeliveries.reduce((sum, v) => sum + v, 0) / visibleDeliveries.length) : 0
+  const avgInstall = visibleInstalls.length > 0 ? (visibleInstalls.reduce((sum, v) => sum + v, 0) / visibleInstalls.length) : 0
+  const avgEscalation = visibleEscalations.length > 0 ? (visibleEscalations.reduce((sum, v) => sum + v, 0) / visibleEscalations.length) : 0
+  const avgContingency = visibleContingencies.length > 0 ? (visibleContingencies.reduce((sum, v) => sum + v, 0) / visibleContingencies.length) : 0
+  const avgSalesTax = visibleSalesTaxes.length > 0 ? (visibleSalesTaxes.reduce((sum, v) => sum + v, 0) / visibleSalesTaxes.length) : 0
+  const avgTotal = avgSubtotal + avgDelivery + avgInstall + avgEscalation + avgContingency + avgSalesTax
+
+  const bestDealerSubtotal = visibleSubtotals.length > 0 ? Math.min(...visibleSubtotals) : null
   const bestDealerTotal = visibleTotals.length > 0 ? Math.min(...visibleTotals) : null
 
   const cycleSort = (key, inviteId = null) => {
@@ -228,7 +257,7 @@ export default function ComparisonPage() {
                 onChange={() => toggleDealer(dealer.invite_id)}
               />
               <span className="responder-name">{dealer.dealer_name || 'Dealer'}</span>
-              <span className="responder-total">{money(dealerTotalsById[dealer.invite_id])}</span>
+              <span className="responder-total">{money(dealerSummaryById[dealer.invite_id]?.total)}</span>
             </label>
           ))}
           {(data.dealers || []).length === 0 ? (
@@ -326,11 +355,103 @@ export default function ComparisonPage() {
           {sortedRows.length > 0 ? (
             <tfoot>
               <tr className="total-row">
+                <td colSpan={3}><strong>Sub-total</strong></td>
+                <td><strong>—</strong></td>
+                <td><strong>{money(avgSubtotal)}</strong></td>
+                {visibleDealers.map((dealer) => {
+                  const summary = dealerSummaryById[dealer.invite_id]
+                  const subtotal = summary?.subtotal || 0
+                  const isBest = subtotal === bestDealerSubtotal
+                  return (
+                    <Fragment key={`subtotal-${dealer.invite_id}`}>
+                      <td className={`dealer-block-start ${isBest ? 'best' : ''}`.trim()}><strong>—</strong></td>
+                      <td className={isBest ? 'best' : ''}><strong>{money(subtotal)}</strong></td>
+                      <td className="dealer-block-end"><strong>{delta(subtotal, avgSubtotal)}</strong></td>
+                    </Fragment>
+                  )
+                })}
+              </tr>
+              <tr>
+                <td colSpan={3}><strong>Delivery</strong></td>
+                <td><strong>—</strong></td>
+                <td><strong>{money(avgDelivery)}</strong></td>
+                {visibleDealers.map((dealer) => {
+                  const value = dealerSummaryById[dealer.invite_id]?.delivery || 0
+                  return (
+                    <Fragment key={`delivery-${dealer.invite_id}`}>
+                      <td className="dealer-block-start"><strong>—</strong></td>
+                      <td><strong>{money(value)}</strong></td>
+                      <td className="dealer-block-end"><strong>{delta(value, avgDelivery)}</strong></td>
+                    </Fragment>
+                  )
+                })}
+              </tr>
+              <tr>
+                <td colSpan={3}><strong>Install</strong></td>
+                <td><strong>—</strong></td>
+                <td><strong>{money(avgInstall)}</strong></td>
+                {visibleDealers.map((dealer) => {
+                  const value = dealerSummaryById[dealer.invite_id]?.install || 0
+                  return (
+                    <Fragment key={`install-${dealer.invite_id}`}>
+                      <td className="dealer-block-start"><strong>—</strong></td>
+                      <td><strong>{money(value)}</strong></td>
+                      <td className="dealer-block-end"><strong>{delta(value, avgInstall)}</strong></td>
+                    </Fragment>
+                  )
+                })}
+              </tr>
+              <tr>
+                <td colSpan={3}><strong>Escalation</strong></td>
+                <td><strong>—</strong></td>
+                <td><strong>{money(avgEscalation)}</strong></td>
+                {visibleDealers.map((dealer) => {
+                  const value = dealerSummaryById[dealer.invite_id]?.escalation || 0
+                  return (
+                    <Fragment key={`escalation-${dealer.invite_id}`}>
+                      <td className="dealer-block-start"><strong>—</strong></td>
+                      <td><strong>{money(value)}</strong></td>
+                      <td className="dealer-block-end"><strong>{delta(value, avgEscalation)}</strong></td>
+                    </Fragment>
+                  )
+                })}
+              </tr>
+              <tr>
+                <td colSpan={3}><strong>Contingency</strong></td>
+                <td><strong>—</strong></td>
+                <td><strong>{money(avgContingency)}</strong></td>
+                {visibleDealers.map((dealer) => {
+                  const value = dealerSummaryById[dealer.invite_id]?.contingency || 0
+                  return (
+                    <Fragment key={`contingency-${dealer.invite_id}`}>
+                      <td className="dealer-block-start"><strong>—</strong></td>
+                      <td><strong>{money(value)}</strong></td>
+                      <td className="dealer-block-end"><strong>{delta(value, avgContingency)}</strong></td>
+                    </Fragment>
+                  )
+                })}
+              </tr>
+              <tr>
+                <td colSpan={3}><strong>Sales Tax</strong></td>
+                <td><strong>—</strong></td>
+                <td><strong>{money(avgSalesTax)}</strong></td>
+                {visibleDealers.map((dealer) => {
+                  const value = dealerSummaryById[dealer.invite_id]?.salesTax || 0
+                  return (
+                    <Fragment key={`sales-tax-${dealer.invite_id}`}>
+                      <td className="dealer-block-start"><strong>—</strong></td>
+                      <td><strong>{money(value)}</strong></td>
+                      <td className="dealer-block-end"><strong>{delta(value, avgSalesTax)}</strong></td>
+                    </Fragment>
+                  )
+                })}
+              </tr>
+              <tr className="total-row">
                 <td colSpan={3}><strong>Total Bid Amount</strong></td>
                 <td><strong>—</strong></td>
                 <td><strong>{money(avgTotal)}</strong></td>
                 {visibleDealers.map((dealer) => {
-                  const total = dealerTotalsById[dealer.invite_id]
+                  const total = dealerSummaryById[dealer.invite_id]?.total || 0
                   const isBest = total === bestDealerTotal
                   return (
                     <Fragment key={`total-${dealer.invite_id}`}>

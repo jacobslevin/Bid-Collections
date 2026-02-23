@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import SectionCard from '../components/SectionCard'
 import { fetchDealerBid, saveDealerBid, submitDealerBid } from '../lib/api'
@@ -95,18 +95,64 @@ function extendedAmount(unitPrice, quantity) {
   return p * q
 }
 
+function netUnitPrice(unitListPrice, discountPercent, tariffPercent) {
+  const listPrice = numberOrNull(unitListPrice)
+  if (listPrice == null) return null
+
+  const discount = numberOrNull(discountPercent) ?? 0
+  const tariff = numberOrNull(tariffPercent) ?? 0
+  const discounted = listPrice * (1 - (discount / 100))
+  return discounted * (1 + (tariff / 100))
+}
+
 export default function DealerBidPage() {
   const { token } = useParams()
 
   const [rows, setRows] = useState([])
+  const [deliveryAmount, setDeliveryAmount] = useState('')
+  const [installAmount, setInstallAmount] = useState('')
+  const [escalationAmount, setEscalationAmount] = useState('')
+  const [contingencyAmount, setContingencyAmount] = useState('')
+  const [salesTaxAmount, setSalesTaxAmount] = useState('')
   const [bidState, setBidState] = useState('draft')
   const [submittedAt, setSubmittedAt] = useState(null)
   const [lastSavedAt, setLastSavedAt] = useState(null)
   const [statusMessage, setStatusMessage] = useState('Loading bid...')
   const [loading, setLoading] = useState(false)
 
+  const subtotal = useMemo(() => (
+    rows.reduce((sum, row) => {
+      const value = extendedAmount(netUnitPrice(row.unit_price, row.discount_percent, row.tariff_percent), row.quantity)
+      return sum + (value ?? 0)
+    }, 0)
+  ), [rows])
+
+  const grandTotal = useMemo(() => (
+    subtotal +
+    (numberOrNull(deliveryAmount) ?? 0) +
+    (numberOrNull(installAmount) ?? 0) +
+    (numberOrNull(escalationAmount) ?? 0) +
+    (numberOrNull(contingencyAmount) ?? 0) +
+    (numberOrNull(salesTaxAmount) ?? 0)
+  ), [subtotal, deliveryAmount, installAmount, escalationAmount, contingencyAmount, salesTaxAmount])
+
   const downloadCsvTemplate = () => {
-    const headers = ['row_index', 'spec_item_id', 'code_tag', 'product_name', 'quantity', 'uom', 'unit_price', 'lead_time_days', 'dealer_notes']
+    const headers = [
+      'row_index',
+      'spec_item_id',
+      'code_tag',
+      'product_name',
+      'brand_name',
+      'quantity',
+      'uom',
+      'unit_list_price',
+      'discount_percent',
+      'tariff_percent',
+      'unit_net_price',
+      'extended_price',
+      'lead_time_days',
+      'dealer_notes'
+    ]
     const lines = [
       headers.join(','),
       ...rows.map((row, index) => ([
@@ -114,9 +160,14 @@ export default function DealerBidPage() {
         row.spec_item_id,
         row.sku || '',
         row.product_name || '',
+        row.brand_name || '',
         row.quantity ?? '',
         row.uom || '',
         row.unit_price ?? '',
+        row.discount_percent ?? '',
+        row.tariff_percent ?? '',
+        netUnitPrice(row.unit_price, row.discount_percent, row.tariff_percent) ?? '',
+        extendedAmount(netUnitPrice(row.unit_price, row.discount_percent, row.tariff_percent), row.quantity) ?? '',
         row.lead_time_days ?? '',
         row.dealer_notes ?? ''
       ].map(escapeCsv).join(',')))
@@ -149,12 +200,14 @@ export default function DealerBidPage() {
       const idxRow = findHeaderIndex(headers, ['rowindex', 'row', 'lineindex'])
       const idxSpec = findHeaderIndex(headers, ['specitemid', 'productid', 'specid', 'itemid'])
       const idxCode = findHeaderIndex(headers, ['codetag', 'code', 'sku'])
-      const idxUnit = findHeaderIndex(headers, ['unitprice', 'price', 'dealerunitprice'])
+      const idxUnit = findHeaderIndex(headers, ['unitlistprice', 'unitprice', 'price', 'dealerunitprice'])
+      const idxDiscount = findHeaderIndex(headers, ['discountpercent', 'percentdiscount', 'discount'])
+      const idxTariff = findHeaderIndex(headers, ['tariffpercent', 'percenttariff', 'tariff'])
       const idxLead = findHeaderIndex(headers, ['leadtimedays', 'leadtime', 'leadtimeindays'])
       const idxNotes = findHeaderIndex(headers, ['dealernotes', 'notes', 'bidnotes'])
 
-      if ((idxRow < 0 && idxSpec < 0 && idxCode < 0) || idxUnit < 0 || idxLead < 0 || idxNotes < 0) {
-        setStatusMessage('CSV import failed: include row_index or spec_item_id or code/tag, plus unit price, lead time days, and dealer notes.')
+      if ((idxRow < 0 && idxSpec < 0 && idxCode < 0) || idxUnit < 0 || idxDiscount < 0 || idxTariff < 0 || idxLead < 0 || idxNotes < 0) {
+        setStatusMessage('CSV import failed: include row_index or spec_item_id or code/tag, plus unit list price, % discount, % tariff, lead time days, and dealer notes.')
         return
       }
 
@@ -206,6 +259,8 @@ export default function DealerBidPage() {
           next[rowIndex] = {
             ...next[rowIndex],
             unit_price: cols[idxUnit] ?? '',
+            discount_percent: cols[idxDiscount] ?? '',
+            tariff_percent: cols[idxTariff] ?? '',
             lead_time_days: cols[idxLead] ?? '',
             dealer_notes: cols[idxNotes] ?? ''
           }
@@ -236,6 +291,11 @@ export default function DealerBidPage() {
         if (!active) return
 
         setRows(result.bid?.line_items || [])
+        setDeliveryAmount(result.bid?.delivery_amount ?? '')
+        setInstallAmount(result.bid?.install_amount ?? '')
+        setEscalationAmount(result.bid?.escalation_amount ?? '')
+        setContingencyAmount(result.bid?.contingency_amount ?? '')
+        setSalesTaxAmount(result.bid?.sales_tax_amount ?? '')
         setBidState(result.bid?.state || 'draft')
         setSubmittedAt(result.bid?.submitted_at || null)
         setStatusMessage('Bid loaded.')
@@ -266,13 +326,21 @@ export default function DealerBidPage() {
     return rows.map((row) => ({
       spec_item_id: row.spec_item_id,
       unit_price: row.unit_price,
+      discount_percent: row.discount_percent,
+      tariff_percent: row.tariff_percent,
       lead_time_days: row.lead_time_days,
       dealer_notes: row.dealer_notes
     }))
   }
 
   const saveDraftRequest = async () => {
-    const result = await saveDealerBid(token, buildLineItemPayload())
+    const result = await saveDealerBid(token, buildLineItemPayload(), {
+      delivery_amount: deliveryAmount,
+      install_amount: installAmount,
+      escalation_amount: escalationAmount,
+      contingency_amount: contingencyAmount,
+      sales_tax_amount: salesTaxAmount
+    })
     setBidState(result.state || 'draft')
     setLastSavedAt(result.updated_at || null)
     return result
@@ -355,11 +423,15 @@ export default function DealerBidPage() {
             <tr>
               <th>Code/Tag</th>
               <th>Product</th>
+              <th>Brand Name</th>
               <th>Qty/UOM</th>
-              <th>Unit Price</th>
-              <th>Extended Price</th>
+              <th>Unit List Price</th>
+              <th>% Discount</th>
+              <th>% Tariff</th>
+              <th>Unit Net Price</th>
               <th>Lead Time (days)</th>
               <th>Dealer Notes</th>
+              <th>Extended Price</th>
             </tr>
           </thead>
           <tbody>
@@ -367,6 +439,7 @@ export default function DealerBidPage() {
               <tr key={row.spec_item_id}>
                 <td>{row.sku || '—'}</td>
                 <td>{row.product_name || '—'}</td>
+                <td>{row.brand_name || '—'}</td>
                 <td>{row.quantity || '—'} {row.uom || ''}</td>
                 <td>
                   <input
@@ -375,7 +448,21 @@ export default function DealerBidPage() {
                     disabled={bidState === 'submitted'}
                   />
                 </td>
-                <td>{money(extendedAmount(row.unit_price, row.quantity))}</td>
+                <td>
+                  <input
+                    value={row.discount_percent ?? ''}
+                    onChange={(event) => updateRow(index, 'discount_percent', event.target.value)}
+                    disabled={bidState === 'submitted'}
+                  />
+                </td>
+                <td>
+                  <input
+                    value={row.tariff_percent ?? ''}
+                    onChange={(event) => updateRow(index, 'tariff_percent', event.target.value)}
+                    disabled={bidState === 'submitted'}
+                  />
+                </td>
+                <td>{money(netUnitPrice(row.unit_price, row.discount_percent, row.tariff_percent))}</td>
                 <td>
                   <input
                     value={row.lead_time_days ?? ''}
@@ -390,14 +477,77 @@ export default function DealerBidPage() {
                     disabled={bidState === 'submitted'}
                   />
                 </td>
+                <td>{money(extendedAmount(netUnitPrice(row.unit_price, row.discount_percent, row.tariff_percent), row.quantity))}</td>
               </tr>
             ))}
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={7} className="text-muted">No line items loaded.</td>
+                <td colSpan={11} className="text-muted">No line items loaded.</td>
               </tr>
             ) : null}
           </tbody>
+          {rows.length > 0 ? (
+            <tfoot>
+              <tr className="total-row">
+                <td colSpan={10} style={{ textAlign: 'right' }}>Sub-total</td>
+                <td>{money(subtotal)}</td>
+              </tr>
+              <tr>
+                <td colSpan={10} style={{ textAlign: 'right' }}>Delivery</td>
+                <td>
+                  <input
+                    value={deliveryAmount}
+                    onChange={(event) => setDeliveryAmount(event.target.value)}
+                    disabled={bidState === 'submitted'}
+                  />
+                </td>
+              </tr>
+              <tr>
+                <td colSpan={10} style={{ textAlign: 'right' }}>Install</td>
+                <td>
+                  <input
+                    value={installAmount}
+                    onChange={(event) => setInstallAmount(event.target.value)}
+                    disabled={bidState === 'submitted'}
+                  />
+                </td>
+              </tr>
+              <tr>
+                <td colSpan={10} style={{ textAlign: 'right' }}>Escalation</td>
+                <td>
+                  <input
+                    value={escalationAmount}
+                    onChange={(event) => setEscalationAmount(event.target.value)}
+                    disabled={bidState === 'submitted'}
+                  />
+                </td>
+              </tr>
+              <tr>
+                <td colSpan={10} style={{ textAlign: 'right' }}>Contingency</td>
+                <td>
+                  <input
+                    value={contingencyAmount}
+                    onChange={(event) => setContingencyAmount(event.target.value)}
+                    disabled={bidState === 'submitted'}
+                  />
+                </td>
+              </tr>
+              <tr>
+                <td colSpan={10} style={{ textAlign: 'right' }}>Sales Tax</td>
+                <td>
+                  <input
+                    value={salesTaxAmount}
+                    onChange={(event) => setSalesTaxAmount(event.target.value)}
+                    disabled={bidState === 'submitted'}
+                  />
+                </td>
+              </tr>
+              <tr className="total-row">
+                <td colSpan={10} style={{ textAlign: 'right' }}>Grand Total</td>
+                <td>{money(grandTotal)}</td>
+              </tr>
+            </tfoot>
+          ) : null}
         </table>
       </SectionCard>
     </div>

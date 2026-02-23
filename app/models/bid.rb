@@ -6,6 +6,8 @@ class Bid < ApplicationRecord
   enum :state, { draft: 0, submitted: 1 }, default: :draft
 
   validates :state, presence: true
+  validates :delivery_amount, :install_amount, :escalation_amount, :contingency_amount, :sales_tax_amount,
+            numericality: { greater_than_or_equal_to: 0 }, allow_nil: true
 
   before_update :prevent_edit_after_submit
 
@@ -16,19 +18,23 @@ class Bid < ApplicationRecord
         spec_item_id: spec_item.id,
         code_tag: spec_item.sku,
         product_name: spec_item.product_name,
+        brand_name: spec_item.manufacturer,
         quantity: spec_item.quantity&.to_s,
         uom: spec_item.uom,
+        unit_list_price: line_item.unit_price&.to_s,
+        discount_percent: line_item.discount_percent&.to_s,
+        tariff_percent: line_item.tariff_percent&.to_s,
+        unit_net_price: line_item.unit_net_price&.to_s,
+        extended_price: line_item.unit_net_price ? (spec_item.quantity * line_item.unit_net_price).round(4).to_s : nil,
         unit_price: line_item.unit_price&.to_s,
         lead_time_days: line_item.lead_time_days,
         dealer_notes: line_item.dealer_notes
       }
     end
 
-    total = items.sum do |row|
-      quantity = BigDecimal(row[:quantity].to_s)
-      unit_price = row[:unit_price].present? ? BigDecimal(row[:unit_price].to_s) : nil
-      unit_price ? (quantity * unit_price) : 0
-    end
+    subtotal = items.sum { |row| row[:extended_price].present? ? BigDecimal(row[:extended_price]) : 0 }
+    total = subtotal + (delivery_amount || 0).to_d + (install_amount || 0).to_d +
+            (escalation_amount || 0).to_d + (contingency_amount || 0).to_d + (sales_tax_amount || 0).to_d
 
     bid_submission_versions.create!(
       version_number: (bid_submission_versions.maximum(:version_number) || 0) + 1,

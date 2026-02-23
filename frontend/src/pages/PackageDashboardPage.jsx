@@ -48,6 +48,14 @@ function extendedAmount(unitPrice, quantity) {
   return p * q
 }
 
+function netUnitPrice(unitListPrice, discountPercent, tariffPercent) {
+  const listPrice = numberOrNull(unitListPrice)
+  if (listPrice == null) return null
+  const discount = numberOrNull(discountPercent) ?? 0
+  const tariff = numberOrNull(tariffPercent) ?? 0
+  return listPrice * (1 - (discount / 100)) * (1 + (tariff / 100))
+}
+
 export default function PackageDashboardPage() {
   const [bidPackages, setBidPackages] = useState([])
   const [selectedBidPackageId, setSelectedBidPackageId] = useState('')
@@ -538,8 +546,12 @@ export default function PackageDashboardPage() {
                           <tr>
                             <th>Code/Tag</th>
                             <th>Product</th>
+                            <th>Brand Name</th>
                             <th>Qty/UOM</th>
-                            <th>Unit Price</th>
+                            <th>Unit List Price</th>
+                            <th>% Discount</th>
+                            <th>% Tariff</th>
+                            <th>Unit Net Price</th>
                             <th>Extended Price</th>
                             <th>Lead Time</th>
                             <th>Dealer Notes</th>
@@ -550,9 +562,13 @@ export default function PackageDashboardPage() {
                             <tr key={`${version.id}-${line.spec_item_id || index}`}>
                               <td>{line.code_tag || '—'}</td>
                               <td>{line.product_name || '—'}</td>
+                              <td>{line.brand_name || '—'}</td>
                               <td>{line.quantity || '—'} {line.uom || ''}</td>
-                              <td>{money(line.unit_price)}</td>
-                              <td>{money(extendedAmount(line.unit_price, line.quantity))}</td>
+                              <td>{money(line.unit_list_price ?? line.unit_price)}</td>
+                              <td>{line.discount_percent ?? '—'}</td>
+                              <td>{line.tariff_percent ?? '—'}</td>
+                              <td>{money(line.unit_net_price ?? netUnitPrice(line.unit_list_price ?? line.unit_price, line.discount_percent, line.tariff_percent))}</td>
+                              <td>{money(line.extended_price ?? extendedAmount(line.unit_net_price ?? netUnitPrice(line.unit_list_price ?? line.unit_price, line.discount_percent, line.tariff_percent), line.quantity))}</td>
                               <td>{line.lead_time_days ?? '—'}</td>
                               <td>{line.dealer_notes || '—'}</td>
                             </tr>
