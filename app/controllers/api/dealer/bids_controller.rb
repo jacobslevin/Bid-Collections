@@ -29,6 +29,8 @@ module Api
             id: @bid.id,
             state: @bid.state,
             submitted_at: @bid.submitted_at,
+            project_name: @invite.bid_package.project.name,
+            bid_package_name: @invite.bid_package.name,
             delivery_amount: @bid.delivery_amount,
             install_amount: @bid.install_amount,
             escalation_amount: @bid.escalation_amount,

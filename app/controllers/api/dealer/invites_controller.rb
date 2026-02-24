@@ -5,6 +5,7 @@ module Api
         render json: {
           invite: {
             dealer_name: @invite.dealer_name,
+            project_name: @invite.bid_package.project.name,
             bid_package_name: @invite.bid_package.name,
             unlocked: unlocked_for_invite?
           }

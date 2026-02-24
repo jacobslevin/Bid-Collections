@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { fetchInvite, unlockInvite } from '../lib/api'
+import dpLogo from '../assets/vendor-bid/dp-logo.svg'
 
 export default function DealerUnlockPage() {
   const { token } = useParams()
@@ -53,27 +54,31 @@ export default function DealerUnlockPage() {
   }
 
   return (
-    <section className="unlock">
-      <p className="eyebrow">Dealer Access</p>
-      <h2>Unlock Invitation</h2>
-      <p className="text-muted">Invite token: <code>{token}</code></p>
-      {inviteMeta ? (
-        <p className="text-muted">Dealer: {inviteMeta.dealer_name} | Package: {inviteMeta.bid_package_name}</p>
-      ) : null}
-      <label>
-        Password
-        <input
-          type="password"
-          placeholder="Enter invite password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') handleUnlock()
-          }}
-        />
-      </label>
-      <button className="btn btn-primary" onClick={handleUnlock} disabled={loading || !password}>Unlock</button>
-      <p className="text-muted">{statusMessage}</p>
+    <section className="vendor-unlock-page">
+      <div className="vendor-unlock-overlay" />
+      <div className="vendor-unlock-content">
+        <img src={dpLogo} alt="Designer Pages PRO" className="vendor-unlock-logo" />
+        <p className="vendor-unlock-kicker">
+          {inviteMeta?.project_name && inviteMeta?.bid_package_name
+            ? `${inviteMeta.project_name}: ${inviteMeta.bid_package_name}`
+            : (inviteMeta?.bid_package_name || 'PROJECT BID')}
+        </p>
+
+        <div className="vendor-unlock-card">
+          <h2>Bidder Access</h2>
+          <input
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') handleUnlock()
+            }}
+          />
+          <button className="vendor-unlock-btn" onClick={handleUnlock} disabled={loading || !password}>ACCESS</button>
+          <p className="text-muted vendor-unlock-status">{statusMessage}</p>
+        </div>
+      </div>
     </section>
   )
 }

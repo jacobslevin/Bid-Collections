@@ -2,6 +2,17 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import SectionCard from '../components/SectionCard'
 import { fetchDealerBid, saveDealerBid, submitDealerBid } from '../lib/api'
+import bidClosedIcon from '../assets/vendor-bid/bid-closed.svg'
+import downloadCsvIcon from '../assets/vendor-bid/download-csv.svg'
+import dpLogo from '../assets/vendor-bid/dp-logo.svg'
+import draftIcon from '../assets/vendor-bid/draft.svg'
+import grandTotalIcon from '../assets/vendor-bid/grand-total.svg'
+import importCsvIcon from '../assets/vendor-bid/import-csv.svg'
+import lastSavedIcon from '../assets/vendor-bid/last-saved.svg'
+import saveWhiteIcon from '../assets/vendor-bid/save-white.svg'
+import submitWhiteIcon from '../assets/vendor-bid/submit-white.svg'
+import submittedStatusIcon from '../assets/vendor-bid/submitted-status.svg'
+import submittedIcon from '../assets/vendor-bid/submitted.svg'
 
 const usdFormatter = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 2,
@@ -109,6 +120,8 @@ export default function DealerBidPage() {
   const { token } = useParams()
 
   const [rows, setRows] = useState([])
+  const [projectName, setProjectName] = useState('')
+  const [bidPackageName, setBidPackageName] = useState('')
   const [deliveryAmount, setDeliveryAmount] = useState('')
   const [installAmount, setInstallAmount] = useState('')
   const [escalationAmount, setEscalationAmount] = useState('')
@@ -135,6 +148,10 @@ export default function DealerBidPage() {
     (numberOrNull(contingencyAmount) ?? 0) +
     (numberOrNull(salesTaxAmount) ?? 0)
   ), [subtotal, deliveryAmount, installAmount, escalationAmount, contingencyAmount, salesTaxAmount])
+
+  const activityLabel = bidState === 'submitted' ? 'SUBMITTED' : 'LAST SAVED'
+  const activityValue = bidState === 'submitted' ? formatTimestamp(submittedAt) : formatTimestamp(lastSavedAt)
+  const activityIcon = bidState === 'submitted' ? submittedIcon : lastSavedIcon
 
   const downloadCsvTemplate = () => {
     const headers = [
@@ -291,6 +308,8 @@ export default function DealerBidPage() {
         if (!active) return
 
         setRows(result.bid?.line_items || [])
+        setProjectName(result.bid?.project_name || '')
+        setBidPackageName(result.bid?.bid_package_name || '')
         setDeliveryAmount(result.bid?.delivery_amount ?? '')
         setInstallAmount(result.bid?.install_amount ?? '')
         setEscalationAmount(result.bid?.escalation_amount ?? '')
@@ -382,30 +401,74 @@ export default function DealerBidPage() {
   }
 
   return (
-    <div className="stack">
-      <SectionCard
-        title="Dealer Bid Entry"
-        actions={
-          bidState === 'submitted' ? null : (
+    <div className="stack vendor-bid-page">
+      <div className="vendor-brandline">
+        <img src={dpLogo} alt="Designer Pages PRO" className="vendor-brand-logo" />
+        {bidState === 'submitted' ? (
+          <div className="vendor-closed-banner">
+            <img src={bidClosedIcon} alt="" className="vendor-closed-icon" />
+            <span>
+              <strong>Bid Closed.</strong> Need to update something? Reach out to the designer who invited you to reopen it.
+            </span>
+          </div>
+        ) : null}
+      </div>
+
+      <section className="vendor-head-card">
+        <div className="vendor-head-strip">
+          <h2>
+            {projectName && bidPackageName
+              ? `${projectName}: ${bidPackageName}`
+              : (bidPackageName || 'Project Name')}
+          </h2>
+          {bidState === 'submitted' ? null : (
             <div className="action-row">
-              <button className="btn" onClick={handleSaveDraft} disabled={loading}>Save Draft</button>
-              <button className="btn btn-primary" onClick={handleSubmit} disabled={loading}>Submit Final</button>
+              <button className="btn vendor-strip-btn" onClick={handleSaveDraft} disabled={loading}>
+                <img src={saveWhiteIcon} alt="" className="vendor-btn-icon" />
+                Save Draft
+              </button>
+              <button className="btn btn-primary vendor-strip-btn-primary" onClick={handleSubmit} disabled={loading}>
+                <img src={submitWhiteIcon} alt="" className="vendor-btn-icon" />
+                Submit Final
+              </button>
             </div>
-          )
-        }
-      >
-        <p className="text-muted">State: {bidState}</p>
-        <p className="text-muted">Last saved: {formatTimestamp(lastSavedAt)}</p>
-        <p className="text-muted">Submitted: {formatTimestamp(submittedAt)}</p>
-        <p className="text-muted">{statusMessage}</p>
-      </SectionCard>
+          )}
+        </div>
+        <div className="vendor-metric-grid">
+          <div className="vendor-metric-card">
+            <img src={bidState === 'submitted' ? submittedStatusIcon : draftIcon} alt="" className="vendor-metric-icon" />
+            <div>
+              <div className="vendor-metric-label">STATUS</div>
+              <div className={`vendor-state-pill ${bidState}`}>{bidState}</div>
+            </div>
+          </div>
+          <div className="vendor-metric-card">
+            <img src={activityIcon} alt="" className="vendor-metric-icon" />
+            <div>
+              <div className="vendor-metric-label">{activityLabel}</div>
+              <div className="vendor-metric-value">{activityValue}</div>
+            </div>
+          </div>
+          <div className="vendor-metric-card vendor-total-card">
+            <img src={grandTotalIcon} alt="" className="vendor-metric-icon" />
+            <div>
+              <div className="vendor-metric-label">GRAND TOTAL</div>
+              <div className="vendor-total-value">{money(grandTotal)}</div>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <SectionCard
         title="Line Items"
         actions={
           <div className="action-row">
-            <button className="btn" onClick={downloadCsvTemplate}>Download CSV</button>
+            <button className="btn" onClick={downloadCsvTemplate}>
+              <img src={downloadCsvIcon} alt="" className="vendor-table-action-icon" />
+              Download CSV
+            </button>
             <label className={`btn ${bidState === 'submitted' ? 'btn-disabled' : ''}`}>
+              <img src={importCsvIcon} alt="" className="vendor-table-action-icon" />
               Import CSV
               <input
                 type="file"
@@ -418,13 +481,14 @@ export default function DealerBidPage() {
           </div>
         }
       >
-        <table className="table dense">
+        <p className="text-muted vendor-status-inline">{statusMessage}</p>
+        <table className="table dense vendor-line-table">
           <thead>
             <tr>
               <th>Code/Tag</th>
               <th>Product</th>
               <th>Brand Name</th>
-              <th>Qty/UOM</th>
+              <th className="qty-col">Qty/UOM</th>
               <th>Unit List Price</th>
               <th>% Discount</th>
               <th>% Tariff</th>
@@ -440,7 +504,7 @@ export default function DealerBidPage() {
                 <td>{row.sku || '—'}</td>
                 <td>{row.product_name || '—'}</td>
                 <td>{row.brand_name || '—'}</td>
-                <td>{row.quantity || '—'} {row.uom || ''}</td>
+                <td className="qty-col">{row.quantity || '—'} {row.uom || ''}</td>
                 <td>
                   <input
                     value={row.unit_price ?? ''}

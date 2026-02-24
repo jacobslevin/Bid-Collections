@@ -65,6 +65,7 @@ export default function PackageDashboardPage() {
   const [loading, setLoading] = useState(false)
   const [loadingPackages, setLoadingPackages] = useState(false)
   const [copiedInviteId, setCopiedInviteId] = useState(null)
+  const [openActionMenuInviteId, setOpenActionMenuInviteId] = useState(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyData, setHistoryData] = useState(null)
@@ -203,6 +204,11 @@ export default function PackageDashboardPage() {
     } catch (_error) {
       setStatusMessage('Unable to copy link in this browser.')
     }
+  }
+
+  const openInviteLink = (row) => {
+    const absoluteUrl = `${window.location.origin}${row.invite_url}`
+    window.open(absoluteUrl, '_blank', 'noopener,noreferrer')
   }
 
   const emailInvite = (row) => {
@@ -348,6 +354,15 @@ export default function PackageDashboardPage() {
     }
   }
 
+  useEffect(() => {
+    const handleDocClick = (event) => {
+      if (event.target.closest('.invite-actions-menu-wrap')) return
+      setOpenActionMenuInviteId(null)
+    }
+    document.addEventListener('click', handleDocClick)
+    return () => document.removeEventListener('click', handleDocClick)
+  }, [])
+
   return (
     <div className="stack">
       <SectionCard
@@ -424,7 +439,6 @@ export default function PackageDashboardPage() {
               <th>Submitted</th>
               <th>Password</th>
               <th>Actions</th>
-              <th>Invite Link</th>
             </tr>
           </thead>
           <tbody>
@@ -454,36 +468,47 @@ export default function PackageDashboardPage() {
                   />
                 </td>
                 <td>
-                  <div className="action-row">
-                    <button className="btn" onClick={() => openHistory(row.invite_id)}>
-                      History
+                  <div className="invite-actions-menu-wrap">
+                    <button
+                      className="btn invite-actions-menu-trigger"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setOpenActionMenuInviteId((prev) => (prev === row.invite_id ? null : row.invite_id))
+                      }}
+                    >
+                      ...
                     </button>
-                    {row.status === 'submitted' ? (
-                      <button className="btn" onClick={() => reopenBid(row.invite_id)}>
-                        Reopen
-                      </button>
+                    {openActionMenuInviteId === row.invite_id ? (
+                      <div className="invite-actions-menu">
+                        <button className="btn invite-actions-item" onClick={() => { openHistory(row.invite_id); setOpenActionMenuInviteId(null) }}>
+                          History
+                        </button>
+                        {row.status === 'submitted' ? (
+                          <button className="btn invite-actions-item" onClick={() => { reopenBid(row.invite_id); setOpenActionMenuInviteId(null) }}>
+                            Reopen
+                          </button>
+                        ) : null}
+                        <button className="btn invite-actions-item" onClick={() => { openInviteLink(row); setOpenActionMenuInviteId(null) }}>
+                          View Invite Link
+                        </button>
+                        <button className="btn invite-actions-item" onClick={() => { copyInviteLink(row); setOpenActionMenuInviteId(null) }}>
+                          {copiedInviteId === row.invite_id ? 'Copied' : 'Copy Invite Link'}
+                        </button>
+                        <button className="btn invite-actions-item" onClick={() => { emailInvite(row); setOpenActionMenuInviteId(null) }}>
+                          Email
+                        </button>
+                        <button className="btn invite-actions-item invite-actions-delete" onClick={() => { removeInvite(row); setOpenActionMenuInviteId(null) }}>
+                          Delete
+                        </button>
+                      </div>
                     ) : null}
-                    <button className="btn btn-danger" onClick={() => removeInvite(row)}>
-                      Delete
-                    </button>
-                  </div>
-                </td>
-                <td>
-                  <div className="invite-link-cell">
-                    <code>{row.invite_url}</code>
-                    <button className="btn" onClick={() => copyInviteLink(row)}>
-                      {copiedInviteId === row.invite_id ? 'Copied' : 'Copy Link'}
-                    </button>
-                    <button className="btn" onClick={() => emailInvite(row)}>
-                      Email
-                    </button>
                   </div>
                 </td>
               </tr>
             ))}
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={9} className="text-muted">No invite rows loaded yet.</td>
+                <td colSpan={8} className="text-muted">No invite rows loaded yet.</td>
               </tr>
             ) : null}
           </tbody>
