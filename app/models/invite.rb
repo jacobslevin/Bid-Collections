@@ -8,4 +8,6 @@ class Invite < ApplicationRecord
 
   validates :dealer_name, presence: true
   validates :token, presence: true, uniqueness: true
+
+  scope :active, -> { where(disabled: false) }
 end

@@ -2,6 +2,7 @@ module Api
   module Dealer
     class BaseController < Api::BaseController
       before_action :load_invite
+      before_action :ensure_active_invite!
 
       private
 
@@ -13,6 +14,12 @@ module Api
         return if unlocked_for_invite? || recently_unlocked_for_invite?
 
         render json: { error: 'Invite is locked' }, status: :unauthorized
+      end
+
+      def ensure_active_invite!
+        return unless @invite.disabled?
+
+        render json: { error: 'Invite has been disabled. Contact the designer who invited you.' }, status: :forbidden
       end
 
       def unlocked_for_invite?

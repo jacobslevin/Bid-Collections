@@ -8,9 +8,10 @@ export default function DealerUnlockPage() {
   const navigate = useNavigate()
 
   const [password, setPassword] = useState('')
-  const [statusMessage, setStatusMessage] = useState('Enter password to unlock this invite.')
+  const [statusMessage, setStatusMessage] = useState('')
   const [loading, setLoading] = useState(false)
   const [inviteMeta, setInviteMeta] = useState(null)
+  const inviteDisabled = Boolean(inviteMeta?.disabled)
 
   useEffect(() => {
     let active = true
@@ -37,14 +38,13 @@ export default function DealerUnlockPage() {
   }, [navigate, token])
 
   const handleUnlock = async () => {
-    if (!password) return
+    if (!password || inviteDisabled) return
 
     setLoading(true)
-    setStatusMessage('Unlocking invite...')
+    setStatusMessage('')
 
     try {
       await unlockInvite(token, password)
-      setStatusMessage('Unlocked. Redirecting...')
       navigate(`/invite/${token}/bid`)
     } catch (error) {
       setStatusMessage(error.message)
@@ -58,25 +58,33 @@ export default function DealerUnlockPage() {
       <div className="vendor-unlock-overlay" />
       <div className="vendor-unlock-content">
         <img src={dpLogo} alt="Designer Pages PRO" className="vendor-unlock-logo" />
-        <p className="vendor-unlock-kicker">
-          {inviteMeta?.project_name && inviteMeta?.bid_package_name
-            ? `${inviteMeta.project_name}: ${inviteMeta.bid_package_name}`
-            : (inviteMeta?.bid_package_name || 'PROJECT BID')}
-        </p>
+        {!inviteDisabled ? (
+          <p className="vendor-unlock-kicker">
+            {inviteMeta?.project_name && inviteMeta?.bid_package_name
+              ? `${inviteMeta.project_name}: ${inviteMeta.bid_package_name}`
+              : (inviteMeta?.bid_package_name || 'PROJECT BID')}
+          </p>
+        ) : null}
 
         <div className="vendor-unlock-card">
-          <h2>Bidder Access</h2>
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') handleUnlock()
-            }}
-          />
-          <button className="vendor-unlock-btn" onClick={handleUnlock} disabled={loading || !password}>ACCESS</button>
-          <p className="text-muted vendor-unlock-status">{statusMessage}</p>
+          {inviteDisabled ? (
+            <div className="vendor-unlock-disabled-notice">Invite has been disabled.</div>
+          ) : (
+            <>
+              <h2>Bidder Access</h2>
+              <input
+                type="password"
+                placeholder="Password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') handleUnlock()
+                }}
+              />
+              <button className="vendor-unlock-btn" onClick={handleUnlock} disabled={loading || !password}>ACCESS</button>
+              {statusMessage ? <p className="vendor-unlock-error">{statusMessage}</p> : null}
+            </>
+          )}
         </div>
       </div>
     </section>

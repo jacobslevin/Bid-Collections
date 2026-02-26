@@ -122,32 +122,97 @@ export default function DealerBidPage() {
   const [rows, setRows] = useState([])
   const [projectName, setProjectName] = useState('')
   const [bidPackageName, setBidPackageName] = useState('')
+  const [instructions, setInstructions] = useState('')
   const [deliveryAmount, setDeliveryAmount] = useState('')
   const [installAmount, setInstallAmount] = useState('')
   const [escalationAmount, setEscalationAmount] = useState('')
   const [contingencyAmount, setContingencyAmount] = useState('')
   const [salesTaxAmount, setSalesTaxAmount] = useState('')
+  const [activeGeneralFields, setActiveGeneralFields] = useState([
+    'delivery_amount',
+    'install_amount',
+    'escalation_amount',
+    'contingency_amount',
+    'sales_tax_amount'
+  ])
   const [bidState, setBidState] = useState('draft')
   const [submittedAt, setSubmittedAt] = useState(null)
   const [lastSavedAt, setLastSavedAt] = useState(null)
   const [statusMessage, setStatusMessage] = useState('Loading bid...')
   const [loading, setLoading] = useState(false)
 
+  const rowIdentity = (row, index) => `${row.spec_item_id}-${row.is_substitution ? 'sub' : 'base'}-${index}`
+
+  const rowDisplayNumberBySpec = useMemo(() => {
+    const map = new Map()
+    let counter = 0
+    rows.forEach((row) => {
+      if (!map.has(row.spec_item_id)) {
+        counter += 1
+        map.set(row.spec_item_id, counter)
+      }
+    })
+    return map
+  }, [rows])
+
+  const hasSubstitutionForSpec = (specItemId) => rows.some((row) => row.spec_item_id === specItemId && row.is_substitution)
+
+  const pickSubtotalRow = (specRows) => {
+    const basisPriced = specRows.find((row) => !row.is_substitution && numberOrNull(row.unit_price) != null)
+    if (basisPriced) return basisPriced
+
+    const substitutionPriced = specRows.find((row) => row.is_substitution && numberOrNull(row.unit_price) != null)
+    if (substitutionPriced) return substitutionPriced
+
+    return specRows.find((row) => !row.is_substitution) || specRows[0]
+  }
+
   const subtotal = useMemo(() => (
-    rows.reduce((sum, row) => {
-      const value = extendedAmount(netUnitPrice(row.unit_price, row.discount_percent, row.tariff_percent), row.quantity)
+    Array.from(rows.reduce((grouped, row) => {
+      const list = grouped.get(row.spec_item_id) || []
+      list.push(row)
+      grouped.set(row.spec_item_id, list)
+      return grouped
+    }, new Map()).values()).reduce((sum, specRows) => {
+      const activeRow = pickSubtotalRow(specRows)
+      const value = extendedAmount(
+        netUnitPrice(activeRow?.unit_price, activeRow?.discount_percent, activeRow?.tariff_percent),
+        activeRow?.quantity
+      )
       return sum + (value ?? 0)
     }, 0)
   ), [rows])
 
   const grandTotal = useMemo(() => (
     subtotal +
-    (numberOrNull(deliveryAmount) ?? 0) +
-    (numberOrNull(installAmount) ?? 0) +
-    (numberOrNull(escalationAmount) ?? 0) +
-    (numberOrNull(contingencyAmount) ?? 0) +
-    (numberOrNull(salesTaxAmount) ?? 0)
-  ), [subtotal, deliveryAmount, installAmount, escalationAmount, contingencyAmount, salesTaxAmount])
+    (activeGeneralFields.includes('delivery_amount') ? (numberOrNull(deliveryAmount) ?? 0) : 0) +
+    (activeGeneralFields.includes('install_amount') ? (numberOrNull(installAmount) ?? 0) : 0) +
+    (activeGeneralFields.includes('escalation_amount') ? (numberOrNull(escalationAmount) ?? 0) : 0) +
+    (activeGeneralFields.includes('contingency_amount') ? (numberOrNull(contingencyAmount) ?? 0) : 0) +
+    (activeGeneralFields.includes('sales_tax_amount') ? (numberOrNull(salesTaxAmount) ?? 0) : 0)
+  ), [subtotal, deliveryAmount, installAmount, escalationAmount, contingencyAmount, salesTaxAmount, activeGeneralFields])
+
+  const progressSummary = useMemo(() => {
+    const grouped = rows.reduce((memo, row) => {
+      const list = memo.get(row.spec_item_id) || []
+      list.push(row)
+      memo.set(row.spec_item_id, list)
+      return memo
+    }, new Map())
+
+    const totalLineItems = grouped.size
+    const quotedLineItems = Array.from(grouped.values()).reduce((count, specRows) => {
+      const hasQuotedPrice = specRows.some((row) => numberOrNull(row.unit_price) != null)
+      return count + (hasQuotedPrice ? 1 : 0)
+    }, 0)
+    const percentComplete = totalLineItems > 0 ? (quotedLineItems / totalLineItems) * 100 : 0
+
+    return {
+      quotedLineItems,
+      totalLineItems,
+      percentComplete
+    }
+  }, [rows])
 
   const activityLabel = bidState === 'submitted' ? 'SUBMITTED' : 'LAST SAVED'
   const activityValue = bidState === 'submitted' ? formatTimestamp(submittedAt) : formatTimestamp(lastSavedAt)
@@ -156,6 +221,7 @@ export default function DealerBidPage() {
   const downloadCsvTemplate = () => {
     const headers = [
       'row_index',
+      'row_type',
       'spec_item_id',
       'code_tag',
       'product_name',
@@ -174,6 +240,7 @@ export default function DealerBidPage() {
       headers.join(','),
       ...rows.map((row, index) => ([
         index,
+        row.is_substitution ? 'substitution' : 'basis_of_design',
         row.spec_item_id,
         row.sku || '',
         row.product_name || '',
@@ -235,6 +302,8 @@ export default function DealerBidPage() {
       const bySpecId = new Map()
       const byCodeTag = new Map()
       rows.forEach((row, index) => {
+        if (row.is_substitution) return
+
         const specRaw = String(row.spec_item_id || '')
         const specNorm = normalizeKey(specRaw)
         const specNum = normalizeNumericLike(specRaw)
@@ -310,11 +379,19 @@ export default function DealerBidPage() {
         setRows(result.bid?.line_items || [])
         setProjectName(result.bid?.project_name || '')
         setBidPackageName(result.bid?.bid_package_name || '')
+        setInstructions(result.bid?.instructions || '')
         setDeliveryAmount(result.bid?.delivery_amount ?? '')
         setInstallAmount(result.bid?.install_amount ?? '')
         setEscalationAmount(result.bid?.escalation_amount ?? '')
         setContingencyAmount(result.bid?.contingency_amount ?? '')
         setSalesTaxAmount(result.bid?.sales_tax_amount ?? '')
+        setActiveGeneralFields(result.bid?.active_general_fields || [
+          'delivery_amount',
+          'install_amount',
+          'escalation_amount',
+          'contingency_amount',
+          'sales_tax_amount'
+        ])
         setBidState(result.bid?.state || 'draft')
         setSubmittedAt(result.bid?.submitted_at || null)
         setStatusMessage('Bid loaded.')
@@ -341,9 +418,44 @@ export default function DealerBidPage() {
     })
   }
 
+  const addSubstitutionRow = (index) => {
+    const sourceRow = rows[index]
+    if (!sourceRow || sourceRow.is_substitution || hasSubstitutionForSpec(sourceRow.spec_item_id)) return
+
+    const newRow = {
+      spec_item_id: sourceRow.spec_item_id,
+      sku: sourceRow.sku,
+      quantity: sourceRow.quantity,
+      uom: sourceRow.uom,
+      is_substitution: true,
+      product_name: '',
+      brand_name: '',
+      substitution_product_name: '',
+      substitution_brand_name: '',
+      unit_price: '',
+      discount_percent: '',
+      tariff_percent: '',
+      lead_time_days: '',
+      dealer_notes: ''
+    }
+
+    setRows((prev) => {
+      const next = [...prev]
+      next.splice(index + 1, 0, newRow)
+      return next
+    })
+  }
+
+  const removeSubstitutionRow = (index) => {
+    setRows((prev) => prev.filter((_row, rowIndex) => rowIndex !== index))
+  }
+
   const buildLineItemPayload = () => {
     return rows.map((row) => ({
       spec_item_id: row.spec_item_id,
+      is_substitution: row.is_substitution ? 'true' : 'false',
+      substitution_product_name: row.is_substitution ? (row.product_name ?? '') : '',
+      substitution_brand_name: row.is_substitution ? (row.brand_name ?? '') : '',
       unit_price: row.unit_price,
       discount_percent: row.discount_percent,
       tariff_percent: row.tariff_percent,
@@ -353,6 +465,11 @@ export default function DealerBidPage() {
   }
 
   const saveDraftRequest = async () => {
+    const invalidSubstitution = rows.find((row) => row.is_substitution && numberOrNull(row.unit_price) == null)
+    if (invalidSubstitution) {
+      throw new Error('Each substitution row must include a Unit List Price before saving.')
+    }
+
     const result = await saveDealerBid(token, buildLineItemPayload(), {
       delivery_amount: deliveryAmount,
       install_amount: installAmount,
@@ -443,6 +560,16 @@ export default function DealerBidPage() {
             </div>
           </div>
           <div className="vendor-metric-card">
+            <img src={submittedStatusIcon} alt="" className="vendor-metric-icon" />
+            <div>
+              <div className="vendor-metric-label">QUOTED ITEMS</div>
+              <div className="vendor-metric-value">
+                {progressSummary.quotedLineItems} / {progressSummary.totalLineItems}
+              </div>
+              <div className="vendor-metric-subvalue">{progressSummary.percentComplete.toFixed(0)}% complete</div>
+            </div>
+          </div>
+          <div className="vendor-metric-card">
             <img src={activityIcon} alt="" className="vendor-metric-icon" />
             <div>
               <div className="vendor-metric-label">{activityLabel}</div>
@@ -458,6 +585,12 @@ export default function DealerBidPage() {
           </div>
         </div>
       </section>
+
+      {instructions ? (
+        <SectionCard title="Instructions">
+          <p className="text-muted" style={{ whiteSpace: 'pre-wrap' }}>{instructions}</p>
+        </SectionCard>
+      ) : null}
 
       <SectionCard
         title="Line Items"
@@ -485,9 +618,10 @@ export default function DealerBidPage() {
         <table className="table dense vendor-line-table">
           <thead>
             <tr>
+              <th></th>
               <th>Code/Tag</th>
               <th>Product</th>
-              <th>Brand Name</th>
+              <th>Brand</th>
               <th className="qty-col">Qty/UOM</th>
               <th>Unit List Price</th>
               <th>% Discount</th>
@@ -500,10 +634,48 @@ export default function DealerBidPage() {
           </thead>
           <tbody>
             {rows.map((row, index) => (
-              <tr key={row.spec_item_id}>
-                <td>{row.sku || '—'}</td>
-                <td>{row.product_name || '—'}</td>
-                <td>{row.brand_name || '—'}</td>
+              <tr key={rowIdentity(row, index)} className={row.is_substitution ? 'substitution-row' : ''}>
+                <td className="vendor-row-index">
+                  {rowDisplayNumberBySpec.get(row.spec_item_id)}{row.is_substitution ? ' Sub' : ''}
+                </td>
+                <td>
+                  {row.sku || '—'}
+                  {row.is_substitution ? <span className="substitution-chip">Sub</span> : null}
+                  {!row.is_substitution && bidState !== 'submitted' && !hasSubstitutionForSpec(row.spec_item_id) ? (
+                    <button className="mini-link-btn" type="button" onClick={() => addSubstitutionRow(index)}>
+                      + Add Substitution
+                    </button>
+                  ) : null}
+                  {row.is_substitution && bidState !== 'submitted' ? (
+                    <button className="mini-link-btn danger" type="button" onClick={() => removeSubstitutionRow(index)}>
+                      Remove Substitution
+                    </button>
+                  ) : null}
+                </td>
+                <td>
+                  {row.is_substitution ? (
+                    <input
+                      value={row.product_name ?? ''}
+                      onChange={(event) => updateRow(index, 'product_name', event.target.value)}
+                      placeholder="Substitution product"
+                      disabled={bidState === 'submitted'}
+                    />
+                  ) : (
+                    row.product_name || '—'
+                  )}
+                </td>
+                <td>
+                  {row.is_substitution ? (
+                    <input
+                      value={row.brand_name ?? ''}
+                      onChange={(event) => updateRow(index, 'brand_name', event.target.value)}
+                      placeholder="Substitution brand"
+                      disabled={bidState === 'submitted'}
+                    />
+                  ) : (
+                    row.brand_name || '—'
+                  )}
+                </td>
                 <td className="qty-col">{row.quantity || '—'} {row.uom || ''}</td>
                 <td>
                   <input
@@ -546,18 +718,19 @@ export default function DealerBidPage() {
             ))}
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={11} className="text-muted">No line items loaded.</td>
+                <td colSpan={12} className="text-muted">No line items loaded.</td>
               </tr>
             ) : null}
           </tbody>
           {rows.length > 0 ? (
             <tfoot>
               <tr className="total-row">
-                <td colSpan={10} style={{ textAlign: 'right' }}>Sub-total</td>
+                <td colSpan={11} style={{ textAlign: 'right' }}>Sub-total</td>
                 <td>{money(subtotal)}</td>
               </tr>
+              {activeGeneralFields.includes('delivery_amount') ? (
               <tr>
-                <td colSpan={10} style={{ textAlign: 'right' }}>Delivery</td>
+                <td colSpan={11} style={{ textAlign: 'right' }}>Delivery</td>
                 <td>
                   <input
                     value={deliveryAmount}
@@ -566,8 +739,10 @@ export default function DealerBidPage() {
                   />
                 </td>
               </tr>
+              ) : null}
+              {activeGeneralFields.includes('install_amount') ? (
               <tr>
-                <td colSpan={10} style={{ textAlign: 'right' }}>Install</td>
+                <td colSpan={11} style={{ textAlign: 'right' }}>Install</td>
                 <td>
                   <input
                     value={installAmount}
@@ -576,8 +751,10 @@ export default function DealerBidPage() {
                   />
                 </td>
               </tr>
+              ) : null}
+              {activeGeneralFields.includes('escalation_amount') ? (
               <tr>
-                <td colSpan={10} style={{ textAlign: 'right' }}>Escalation</td>
+                <td colSpan={11} style={{ textAlign: 'right' }}>Escalation</td>
                 <td>
                   <input
                     value={escalationAmount}
@@ -586,8 +763,10 @@ export default function DealerBidPage() {
                   />
                 </td>
               </tr>
+              ) : null}
+              {activeGeneralFields.includes('contingency_amount') ? (
               <tr>
-                <td colSpan={10} style={{ textAlign: 'right' }}>Contingency</td>
+                <td colSpan={11} style={{ textAlign: 'right' }}>Contingency</td>
                 <td>
                   <input
                     value={contingencyAmount}
@@ -596,8 +775,10 @@ export default function DealerBidPage() {
                   />
                 </td>
               </tr>
+              ) : null}
+              {activeGeneralFields.includes('sales_tax_amount') ? (
               <tr>
-                <td colSpan={10} style={{ textAlign: 'right' }}>Sales Tax</td>
+                <td colSpan={11} style={{ textAlign: 'right' }}>Sales Tax</td>
                 <td>
                   <input
                     value={salesTaxAmount}
@@ -606,8 +787,9 @@ export default function DealerBidPage() {
                   />
                 </td>
               </tr>
+              ) : null}
               <tr className="total-row">
-                <td colSpan={10} style={{ textAlign: 'right' }}>Grand Total</td>
+                <td colSpan={11} style={{ textAlign: 'right' }}>Grand Total</td>
                 <td>{money(grandTotal)}</td>
               </tr>
             </tfoot>

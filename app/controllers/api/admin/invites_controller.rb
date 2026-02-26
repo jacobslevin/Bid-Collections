@@ -67,6 +67,38 @@ module Api
         }
       end
 
+      def reclose
+        invite = @bid_package.invites.includes(bid: :bid_submission_versions).find(params[:id])
+        bid = invite.bid
+
+        unless bid
+          return render json: { error: 'No bid exists for this invite' }, status: :conflict
+        end
+
+        latest_version = bid.bid_submission_versions.order(version_number: :desc).first
+        unless latest_version
+          return render json: { error: 'No submitted version to use' }, status: :conflict
+        end
+
+        ActiveRecord::Base.transaction do
+          bid.update!(
+            state: :submitted,
+            submitted_at: latest_version.submitted_at || Time.current,
+            last_reopen_reason: 'reclosed to submitted version'
+          )
+          invite.update!(disabled: true)
+        end
+
+        render json: {
+          reclosed: true,
+          invite_id: invite.id,
+          state: bid.state,
+          submitted_at: bid.submitted_at,
+          access_state: 'disabled',
+          current_version: latest_version.version_number
+        }
+      end
+
       def password
         invite = @bid_package.invites.find(params[:id])
         new_password = params[:password].to_s
@@ -86,6 +118,72 @@ module Api
         render_unprocessable!(e.record.errors.full_messages)
       end
 
+      def disable
+        invite = @bid_package.invites.find(params[:id])
+        invite.update!(disabled: true)
+        render json: { disabled: true, invite_id: invite.id }
+      end
+
+      def enable
+        invite = @bid_package.invites.find(params[:id])
+        invite.update!(disabled: false)
+        render json: { enabled: true, invite_id: invite.id }
+      end
+
+      def bulk_disable
+        invites = scoped_bulk_invites
+        return render_unprocessable!('Select at least one invite') if invites.empty?
+
+        invites.update_all(disabled: true)
+        render json: { disabled: true, invite_ids: invites.pluck(:id) }
+      end
+
+      def bulk_enable
+        invites = scoped_bulk_invites
+        return render_unprocessable!('Select at least one invite') if invites.empty?
+
+        invites.update_all(disabled: false)
+        render json: { enabled: true, invite_ids: invites.pluck(:id) }
+      end
+
+      def bulk_reopen
+        invites = scoped_bulk_invites.includes(:bid)
+        return render_unprocessable!('Select at least one invite') if invites.empty?
+
+        reopened_ids = []
+        skipped_ids = []
+
+        invites.each do |invite|
+          bid = invite.bid
+          if bid&.submitted?
+            bid.update!(
+              state: :draft,
+              submitted_at: nil,
+              last_reopened_at: Time.current,
+              last_reopen_reason: 'bulk reopen'
+            )
+            reopened_ids << invite.id
+          else
+            skipped_ids << invite.id
+          end
+        end
+
+        render json: { reopened: true, reopened_ids:, skipped_ids: }
+      end
+
+      def bulk_destroy
+        invites = scoped_bulk_invites
+        return render_unprocessable!('Select at least one invite') if invites.empty?
+
+        deleted_ids = []
+        invites.find_each do |invite|
+          deleted_ids << invite.id
+          invite.destroy!
+        end
+
+        render json: { deleted: true, deleted_ids: }
+      end
+
       private
 
       def load_bid_package
@@ -94,6 +192,12 @@ module Api
 
       def invite_params
         params.require(:invite).permit(:dealer_name, :dealer_email, :password, :password_confirmation)
+      end
+
+      def scoped_bulk_invites
+        ids = Array(params[:invite_ids]).map(&:to_i).uniq
+        scope = @bid_package.invites
+        ids.any? ? scope.where(id: ids) : scope.none
       end
     end
   end

@@ -2,6 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import SectionCard from '../components/SectionCard'
 import { createBidPackage, fetchProjects, previewBidPackage } from '../lib/api'
 
+const GENERAL_PRICING_FIELDS = [
+  { key: 'delivery_amount', label: 'Delivery' },
+  { key: 'install_amount', label: 'Install' },
+  { key: 'escalation_amount', label: 'Escalation' },
+  { key: 'contingency_amount', label: 'Contingency' },
+  { key: 'sales_tax_amount', label: 'Sales Tax' }
+]
+
 function formatDateStamp() {
   const now = new Date()
   const y = now.getFullYear()
@@ -27,6 +35,9 @@ export default function ImportPage() {
 
   const [selectedFile, setSelectedFile] = useState(null)
   const [csvContent, setCsvContent] = useState('')
+  const [visibility, setVisibility] = useState('private')
+  const [instructions, setInstructions] = useState('')
+  const [activeGeneralFields, setActiveGeneralFields] = useState(GENERAL_PRICING_FIELDS.map((field) => field.key))
 
   const [previewResult, setPreviewResult] = useState(null)
   const [previewErrors, setPreviewErrors] = useState([])
@@ -119,7 +130,10 @@ export default function ImportPage() {
         name: packageName,
         sourceFilename: selectedFile.name,
         csvContent,
-        sourceProfile: 'designer_pages'
+        sourceProfile: 'designer_pages',
+        visibility,
+        activeGeneralFields,
+        instructions
       })
       setCreateResult(result)
       setStatusMessage(`Bid package ${result.bid_package.id} created with ${result.imported_items_count} items.`)
@@ -151,6 +165,41 @@ export default function ImportPage() {
             Bid Package Name
             <input value={packageName} onChange={(event) => setPackageName(event.target.value)} placeholder="Furniture Package A" />
           </label>
+          <label>
+            Visibility
+            <select value={visibility} onChange={(event) => setVisibility(event.target.value)}>
+              <option value="private">Private</option>
+              <option value="public">Public</option>
+            </select>
+          </label>
+          <label>
+            Instructions
+            <textarea
+              value={instructions}
+              onChange={(event) => setInstructions(event.target.value)}
+              rows={3}
+              placeholder="Optional bidder instructions"
+            />
+          </label>
+        </div>
+
+        <div className="checkbox-grid">
+          <p className="text-muted" style={{ margin: 0 }}>Include General Pricing Fields</p>
+          {GENERAL_PRICING_FIELDS.map((field) => (
+            <label key={field.key} className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={activeGeneralFields.includes(field.key)}
+                onChange={(event) => {
+                  setActiveGeneralFields((prev) => {
+                    if (event.target.checked) return [...prev, field.key]
+                    return prev.filter((key) => key !== field.key)
+                  })
+                }}
+              />
+              {field.label}
+            </label>
+          ))}
         </div>
 
         <label className="dropzone">

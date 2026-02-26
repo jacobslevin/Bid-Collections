@@ -14,13 +14,17 @@ class Bid < ApplicationRecord
   def create_submission_version!
     items = bid_line_items.includes(:spec_item).map do |line_item|
       spec_item = line_item.spec_item
+      display_product_name = line_item.is_substitution? ? (line_item.substitution_product_name.presence || spec_item.product_name) : spec_item.product_name
+      display_brand_name = line_item.is_substitution? ? (line_item.substitution_brand_name.presence || spec_item.manufacturer) : spec_item.manufacturer
+
       {
         spec_item_id: spec_item.id,
         code_tag: spec_item.sku,
-        product_name: spec_item.product_name,
-        brand_name: spec_item.manufacturer,
+        product_name: display_product_name,
+        brand_name: display_brand_name,
         quantity: spec_item.quantity&.to_s,
         uom: spec_item.uom,
+        is_substitution: line_item.is_substitution?,
         unit_list_price: line_item.unit_price&.to_s,
         discount_percent: line_item.discount_percent&.to_s,
         tariff_percent: line_item.tariff_percent&.to_s,
@@ -33,8 +37,7 @@ class Bid < ApplicationRecord
     end
 
     subtotal = items.sum { |row| row[:extended_price].present? ? BigDecimal(row[:extended_price]) : 0 }
-    total = subtotal + (delivery_amount || 0).to_d + (install_amount || 0).to_d +
-            (escalation_amount || 0).to_d + (contingency_amount || 0).to_d + (sales_tax_amount || 0).to_d
+    total = subtotal + active_general_pricing_total
 
     bid_submission_versions.create!(
       version_number: (bid_submission_versions.maximum(:version_number) || 0) + 1,
@@ -42,6 +45,17 @@ class Bid < ApplicationRecord
       total_amount: total,
       line_items_snapshot: items
     )
+  end
+
+  def active_general_pricing_total
+    fields = invite&.bid_package&.active_general_fields || BidPackage::GENERAL_PRICING_FIELDS
+    total = 0.to_d
+    total += (delivery_amount || 0).to_d if fields.include?('delivery_amount')
+    total += (install_amount || 0).to_d if fields.include?('install_amount')
+    total += (escalation_amount || 0).to_d if fields.include?('escalation_amount')
+    total += (contingency_amount || 0).to_d if fields.include?('contingency_amount')
+    total += (sales_tax_amount || 0).to_d if fields.include?('sales_tax_amount')
+    total
   end
 
   private

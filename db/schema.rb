@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.1].define(version: 2026_02_23_164500) do
+ActiveRecord::Schema[7.1].define(version: 2026_02_26_120000) do
   create_table "bid_line_items", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "bid_id", null: false
     t.bigint "spec_item_id", null: false
@@ -21,7 +21,10 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_23_164500) do
     t.datetime "updated_at", null: false
     t.decimal "discount_percent", precision: 6, scale: 3
     t.decimal "tariff_percent", precision: 6, scale: 3
-    t.index ["bid_id", "spec_item_id"], name: "index_bid_line_items_on_bid_id_and_spec_item_id", unique: true
+    t.boolean "is_substitution", default: false, null: false
+    t.string "substitution_product_name"
+    t.string "substitution_brand_name"
+    t.index ["bid_id", "spec_item_id", "is_substitution"], name: "index_bid_line_items_on_bid_spec_substitution", unique: true
     t.index ["bid_id"], name: "index_bid_line_items_on_bid_id"
     t.index ["spec_item_id", "unit_price"], name: "index_bid_line_items_on_spec_item_id_and_unit_price"
     t.index ["spec_item_id"], name: "index_bid_line_items_on_spec_item_id"
@@ -34,8 +37,13 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_23_164500) do
     t.datetime "imported_at", null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.integer "visibility", default: 0, null: false
+    t.json "active_general_fields", null: false
+    t.string "public_token"
+    t.text "instructions"
     t.index ["project_id", "created_at"], name: "index_bid_packages_on_project_id_and_created_at"
     t.index ["project_id"], name: "index_bid_packages_on_project_id"
+    t.index ["public_token"], name: "index_bid_packages_on_public_token", unique: true
   end
 
   create_table "bid_submission_versions", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
@@ -78,8 +86,10 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_23_164500) do
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.string "password_plaintext"
+    t.boolean "disabled", default: false, null: false
     t.index ["bid_package_id", "dealer_name"], name: "index_invites_on_bid_package_id_and_dealer_name"
     t.index ["bid_package_id"], name: "index_invites_on_bid_package_id"
+    t.index ["disabled"], name: "index_invites_on_disabled"
     t.index ["token"], name: "index_invites_on_token", unique: true
   end
 

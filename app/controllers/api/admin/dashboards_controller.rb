@@ -14,7 +14,9 @@ module Api
             dealer_email: invite.dealer_email,
             invite_password: invite.password_plaintext,
             status: dashboard_status_for(bid),
+            access_state: invite.disabled? ? 'disabled' : 'enabled',
             current_version: latest_version,
+            can_reclose: bid.present? && !bid.submitted? && latest_version.positive?,
             last_saved_at: bid&.updated_at,
             submitted_at: bid&.submitted_at,
             last_reopened_at: bid&.last_reopened_at,
@@ -22,7 +24,18 @@ module Api
           }
         end
 
-        render json: { bid_package_id: bid_package.id, invites: rows }
+        render json: {
+          bid_package_id: bid_package.id,
+          bid_package: {
+            id: bid_package.id,
+            name: bid_package.name,
+            visibility: bid_package.visibility,
+            instructions: bid_package.instructions,
+            active_general_fields: bid_package.active_general_fields,
+            public_url: bid_package.visibility_public? ? "/public/bid-packages/#{bid_package.public_token}" : nil
+          },
+          invites: rows
+        }
       end
 
       private

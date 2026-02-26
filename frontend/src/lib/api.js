@@ -51,14 +51,26 @@ export async function previewBidPackage({ projectId, csvContent, sourceProfile }
   })
 }
 
-export async function createBidPackage({ projectId, name, sourceFilename, csvContent, sourceProfile }) {
+export async function createBidPackage({
+  projectId,
+  name,
+  sourceFilename,
+  csvContent,
+  sourceProfile,
+  visibility = 'private',
+  activeGeneralFields = [],
+  instructions = ''
+}) {
   return request(`/api/projects/${projectId}/bid_packages`, {
     method: 'POST',
     body: JSON.stringify({
       name,
       source_filename: sourceFilename,
       csv_content: csvContent,
-      source_profile: sourceProfile
+      source_profile: sourceProfile,
+      visibility,
+      active_general_fields: activeGeneralFields,
+      instructions
     })
   })
 }
@@ -74,6 +86,18 @@ export async function fetchBidPackages() {
 export async function deleteBidPackage(bidPackageId) {
   return request(`/api/bid_packages/${bidPackageId}`, {
     method: 'DELETE'
+  })
+}
+
+export async function updateBidPackage({ bidPackageId, name, visibility, activeGeneralFields, instructions = '' }) {
+  return request(`/api/bid_packages/${bidPackageId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      name,
+      visibility,
+      active_general_fields: activeGeneralFields,
+      instructions
+    })
   })
 }
 
@@ -97,6 +121,48 @@ export async function deleteInvite({ bidPackageId, inviteId }) {
   })
 }
 
+export async function disableInvite({ bidPackageId, inviteId }) {
+  return request(`/api/bid_packages/${bidPackageId}/invites/${inviteId}/disable`, {
+    method: 'PATCH',
+    body: JSON.stringify({})
+  })
+}
+
+export async function enableInvite({ bidPackageId, inviteId }) {
+  return request(`/api/bid_packages/${bidPackageId}/invites/${inviteId}/enable`, {
+    method: 'PATCH',
+    body: JSON.stringify({})
+  })
+}
+
+export async function bulkDisableInvites({ bidPackageId, inviteIds = [] }) {
+  return request(`/api/bid_packages/${bidPackageId}/invites/bulk_disable`, {
+    method: 'POST',
+    body: JSON.stringify({ invite_ids: inviteIds })
+  })
+}
+
+export async function bulkEnableInvites({ bidPackageId, inviteIds = [] }) {
+  return request(`/api/bid_packages/${bidPackageId}/invites/bulk_enable`, {
+    method: 'POST',
+    body: JSON.stringify({ invite_ids: inviteIds })
+  })
+}
+
+export async function bulkReopenInvites({ bidPackageId, inviteIds = [] }) {
+  return request(`/api/bid_packages/${bidPackageId}/invites/bulk_reopen`, {
+    method: 'POST',
+    body: JSON.stringify({ invite_ids: inviteIds })
+  })
+}
+
+export async function bulkDeleteInvites({ bidPackageId, inviteIds = [] }) {
+  return request(`/api/bid_packages/${bidPackageId}/invites/bulk_destroy`, {
+    method: 'POST',
+    body: JSON.stringify({ invite_ids: inviteIds })
+  })
+}
+
 export async function fetchInviteHistory({ bidPackageId, inviteId }) {
   return request(`/api/bid_packages/${bidPackageId}/invites/${inviteId}/history`)
 }
@@ -105,6 +171,13 @@ export async function reopenInviteBid({ bidPackageId, inviteId, reason }) {
   return request(`/api/bid_packages/${bidPackageId}/invites/${inviteId}/reopen`, {
     method: 'POST',
     body: JSON.stringify({ reason })
+  })
+}
+
+export async function recloseInviteBid({ bidPackageId, inviteId }) {
+  return request(`/api/bid_packages/${bidPackageId}/invites/${inviteId}/reclose`, {
+    method: 'POST',
+    body: JSON.stringify({})
   })
 }
 
@@ -119,12 +192,28 @@ export async function fetchComparison(bidPackageId) {
   return request(`/api/bid_packages/${bidPackageId}/comparison`)
 }
 
-export function comparisonExportUrl(bidPackageId) {
-  return `${API_BASE_URL}/api/bid_packages/${bidPackageId}/export.csv`
+export function comparisonExportUrl(bidPackageId, dealerPriceMode = {}, format = 'csv', excludedSpecItemIds = []) {
+  const params = new URLSearchParams()
+  Object.entries(dealerPriceMode || {}).forEach(([inviteId, mode]) => {
+    if (mode === 'alt' || mode === 'bod') {
+      params.append(`price_mode[${inviteId}]`, mode)
+    }
+  })
+  ;(excludedSpecItemIds || []).forEach((specItemId) => {
+    if (specItemId != null && specItemId !== '') {
+      params.append('excluded_spec_item_ids[]', String(specItemId))
+    }
+  })
+  const query = params.toString()
+  return `${API_BASE_URL}/api/bid_packages/${bidPackageId}/export.${format}${query ? `?${query}` : ''}`
 }
 
 export async function fetchInvite(token) {
   return request(`/api/invites/${token}`)
+}
+
+export async function fetchPublicBidPackage(token) {
+  return request(`/api/public/bid_packages/${token}`)
 }
 
 export async function unlockInvite(token, password) {

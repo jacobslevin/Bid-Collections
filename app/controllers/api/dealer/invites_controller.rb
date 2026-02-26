@@ -1,12 +1,15 @@
 module Api
   module Dealer
     class InvitesController < BaseController
+      skip_before_action :ensure_active_invite!, only: :show
+
       def show
         render json: {
           invite: {
             dealer_name: @invite.dealer_name,
             project_name: @invite.bid_package.project.name,
             bid_package_name: @invite.bid_package.name,
+            disabled: @invite.disabled?,
             unlocked: unlocked_for_invite?
           }
         }

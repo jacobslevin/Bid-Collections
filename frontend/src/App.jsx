@@ -6,6 +6,7 @@ import VendorsPage from './pages/VendorsPage'
 import DealerUnlockPage from './pages/DealerUnlockPage'
 import DealerBidPage from './pages/DealerBidPage'
 import ComparisonPage from './pages/ComparisonPage'
+import PublicBidPackagePage from './pages/PublicBidPackagePage'
 
 const navItems = [
   { to: '/vendors', label: 'Vendors' },
@@ -18,10 +19,12 @@ const navItems = [
 export default function App() {
   const location = useLocation()
   const isBidderPath = /^\/invite\/[^/]+(?:\/bid)?$/.test(location.pathname)
+  const isPublicPath = /^\/public\/bid-packages\/[^/]+$/.test(location.pathname)
+  const hideTopbar = isBidderPath || isPublicPath
 
   return (
-    <div className={`app-shell ${isBidderPath ? 'app-shell-bidder' : ''}`.trim()}>
-      {isBidderPath ? null : (
+    <div className={`app-shell ${hideTopbar ? 'app-shell-bidder' : ''}`.trim()}>
+      {hideTopbar ? null : (
         <header className="topbar">
           <div>
             <p className="eyebrow">Designer Pages Prototype</p>
@@ -37,7 +40,7 @@ export default function App() {
         </header>
       )}
 
-      <main className={`content ${isBidderPath ? 'no-topbar' : ''}`.trim()}>
+      <main className={`content ${hideTopbar ? 'no-topbar' : ''}`.trim()}>
         <Routes>
           <Route path="/" element={<Navigate to="/import" replace />} />
           <Route path="/projects" element={<ProjectsPage />} />
@@ -46,6 +49,7 @@ export default function App() {
           <Route path="/package" element={<PackageDashboardPage />} />
           <Route path="/invite/:token" element={<DealerUnlockPage />} />
           <Route path="/invite/:token/bid" element={<DealerBidPage />} />
+          <Route path="/public/bid-packages/:token" element={<PublicBidPackagePage />} />
           <Route path="/comparison" element={<ComparisonPage />} />
         </Routes>
       </main>

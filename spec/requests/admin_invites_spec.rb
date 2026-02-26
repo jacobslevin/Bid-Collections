@@ -66,5 +66,24 @@ RSpec.describe 'Admin Invites API', type: :request do
     expect(bid.last_reopened_at).to be_present
     expect(bid.last_reopen_reason).to eq('Please revise with updated freight')
   end
-end
 
+  it 'disables and enables an invite without deleting bid data' do
+    patch "/api/bid_packages/#{bid_package.id}/invites/#{invite.id}/disable",
+          headers: { 'CONTENT_TYPE' => 'application/json' }
+
+    expect(response).to have_http_status(:ok)
+    expect(json_response['disabled']).to eq(true)
+    expect(invite.reload.disabled).to eq(true)
+    expect(invite.bid).to be_present
+
+    get "/api/invites/#{invite.token}"
+    expect(response).to have_http_status(:forbidden)
+
+    patch "/api/bid_packages/#{bid_package.id}/invites/#{invite.id}/enable",
+          headers: { 'CONTENT_TYPE' => 'application/json' }
+
+    expect(response).to have_http_status(:ok)
+    expect(json_response['enabled']).to eq(true)
+    expect(invite.reload.disabled).to eq(false)
+  end
+end

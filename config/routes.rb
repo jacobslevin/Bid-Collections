@@ -11,18 +11,32 @@ Rails.application.routes.draw do
         end
       end
 
-      resources :bid_packages, only: [:index, :destroy] do
+      resources :bid_packages, only: [:index, :destroy, :update] do
         resources :invites, only: [:create, :destroy] do
+          collection do
+            post :bulk_disable
+            post :bulk_enable
+            post :bulk_reopen
+            post :bulk_destroy
+          end
+
           member do
             get :history
             post :reopen
+            post :reclose
             patch :password
+            patch :disable
+            patch :enable
           end
         end
         get :dashboard, to: 'dashboards#show'
         get :comparison, to: 'comparisons#show'
-        get :export, to: 'exports#show', defaults: { format: :csv }
+        get :export, to: 'exports#show'
       end
+    end
+
+    scope module: :public do
+      get 'public/bid_packages/:token', to: 'bid_packages#show'
     end
 
     scope module: :dealer do

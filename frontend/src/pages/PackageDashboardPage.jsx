@@ -1,16 +1,32 @@
 import { useEffect, useMemo, useState } from 'react'
 import SectionCard from '../components/SectionCard'
 import {
+  bulkDeleteInvites,
+  bulkDisableInvites,
+  bulkEnableInvites,
+  bulkReopenInvites,
   createInvite,
+  disableInvite,
   deleteBidPackage,
   deleteInvite,
+  enableInvite,
   fetchBidPackageDashboard,
   fetchBidPackages,
   fetchInviteHistory,
+  recloseInviteBid,
   reopenInviteBid,
+  updateBidPackage,
   updateInvitePassword
 } from '../lib/api'
 import vendors from '../data/vendors.json'
+
+const GENERAL_PRICING_FIELDS = [
+  { key: 'delivery_amount', label: 'Delivery' },
+  { key: 'install_amount', label: 'Install' },
+  { key: 'escalation_amount', label: 'Escalation' },
+  { key: 'contingency_amount', label: 'Contingency' },
+  { key: 'sales_tax_amount', label: 'Sales Tax' }
+]
 
 const usdFormatter = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 2,
@@ -66,17 +82,26 @@ export default function PackageDashboardPage() {
   const [loadingPackages, setLoadingPackages] = useState(false)
   const [copiedInviteId, setCopiedInviteId] = useState(null)
   const [openActionMenuInviteId, setOpenActionMenuInviteId] = useState(null)
+  const [bulkActionsOpen, setBulkActionsOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyData, setHistoryData] = useState(null)
   const [expandedVersionId, setExpandedVersionId] = useState(null)
   const [passwordDrafts, setPasswordDrafts] = useState({})
   const [savingPasswordByInviteId, setSavingPasswordByInviteId] = useState({})
+  const [loadedPackageSettings, setLoadedPackageSettings] = useState(null)
+  const [packageNameDraft, setPackageNameDraft] = useState('')
+  const [visibilityDraft, setVisibilityDraft] = useState('private')
+  const [instructionsDraft, setInstructionsDraft] = useState('')
+  const [activeGeneralFieldsDraft, setActiveGeneralFieldsDraft] = useState(GENERAL_PRICING_FIELDS.map((field) => field.key))
+  const [editingBidPackage, setEditingBidPackage] = useState(false)
 
   const [dealerName, setDealerName] = useState('')
   const [dealerEmail, setDealerEmail] = useState('')
   const [selectedVendorKey, setSelectedVendorKey] = useState('')
   const [invitePassword, setInvitePassword] = useState('')
+  const [selectedInviteIds, setSelectedInviteIds] = useState([])
+  const [copiedPublicUrl, setCopiedPublicUrl] = useState(false)
 
   const loadBidPackages = async (preserveSelectedId = true) => {
     setLoadingPackages(true)
@@ -126,7 +151,16 @@ export default function PackageDashboardPage() {
     try {
       const data = await fetchBidPackageDashboard(selectedBidPackageId)
       const invites = data.invites || []
+      const bidPackage = data.bid_package || null
       setRows(invites)
+      setSelectedInviteIds([])
+      setBulkActionsOpen(false)
+      setLoadedPackageSettings(bidPackage)
+      setPackageNameDraft(bidPackage?.name || '')
+      setVisibilityDraft(bidPackage?.visibility || 'private')
+      setInstructionsDraft(bidPackage?.instructions || '')
+      setActiveGeneralFieldsDraft(bidPackage?.active_general_fields || GENERAL_PRICING_FIELDS.map((field) => field.key))
+      setEditingBidPackage(false)
       setPasswordDrafts(
         invites.reduce((acc, invite) => {
           acc[invite.invite_id] = invite.invite_password || ''
@@ -206,9 +240,18 @@ export default function PackageDashboardPage() {
     }
   }
 
-  const openInviteLink = (row) => {
-    const absoluteUrl = `${window.location.origin}${row.invite_url}`
-    window.open(absoluteUrl, '_blank', 'noopener,noreferrer')
+  const copyPublicUrl = async () => {
+    const relativeUrl = loadedPackageSettings?.public_url
+    if (!relativeUrl) return
+    const absoluteUrl = `${window.location.origin}${relativeUrl}`
+    try {
+      await navigator.clipboard.writeText(absoluteUrl)
+      setCopiedPublicUrl(true)
+      setTimeout(() => setCopiedPublicUrl(false), 1200)
+      setStatusMessage('Public URL copied.')
+    } catch (_error) {
+      setStatusMessage('Unable to copy URL in this browser.')
+    }
   }
 
   const emailInvite = (row) => {
@@ -308,6 +351,26 @@ export default function PackageDashboardPage() {
     }
   }
 
+  const recloseBid = async (row) => {
+    if (!loadedBidPackageId) return
+    const confirmed = window.confirm(
+      `Reclose ${row.dealer_name} to submitted version v${row.current_version}?\n\nThis will lock invite access and keep their current submitted version in comparison.`
+    )
+    if (!confirmed) return
+
+    setLoading(true)
+    setStatusMessage('Reclosing bid to submitted version...')
+    try {
+      await recloseInviteBid({ bidPackageId: loadedBidPackageId, inviteId: row.invite_id })
+      setStatusMessage(`Bid reclosed at v${row.current_version}. Invite locked.`)
+      await loadDashboard()
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const removeBidPackage = async () => {
     if (!selectedBidPackageId) return
 
@@ -335,6 +398,29 @@ export default function PackageDashboardPage() {
     }
   }
 
+  const saveBidPackageSettings = async () => {
+    if (!loadedBidPackageId) return
+    setLoading(true)
+    setStatusMessage('Saving bid package settings...')
+    try {
+      await updateBidPackage({
+        bidPackageId: loadedBidPackageId,
+        name: packageNameDraft.trim(),
+        visibility: visibilityDraft,
+        activeGeneralFields: activeGeneralFieldsDraft,
+        instructions: instructionsDraft
+      })
+      setStatusMessage('Bid package settings saved.')
+      await loadBidPackages(false)
+      await loadDashboard()
+      setEditingBidPackage(false)
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const removeInvite = async (row) => {
     if (!loadedBidPackageId) return
 
@@ -354,14 +440,137 @@ export default function PackageDashboardPage() {
     }
   }
 
+  const disableBidder = async (row) => {
+    if (!loadedBidPackageId) return
+    setLoading(true)
+    setStatusMessage('Disabling bidder...')
+    try {
+      await disableInvite({ bidPackageId: loadedBidPackageId, inviteId: row.invite_id })
+      setStatusMessage('Bidder disabled.')
+      await loadDashboard()
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const enableBidder = async (row) => {
+    if (!loadedBidPackageId) return
+    setLoading(true)
+    setStatusMessage('Enabling bidder...')
+    try {
+      await enableInvite({ bidPackageId: loadedBidPackageId, inviteId: row.invite_id })
+      setStatusMessage('Bidder enabled.')
+      await loadDashboard()
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const bulkDisableBidders = async () => {
+    if (!loadedBidPackageId || selectedInviteIds.length === 0) return
+    setLoading(true)
+    setStatusMessage('Disabling bidders...')
+    try {
+      await bulkDisableInvites({ bidPackageId: loadedBidPackageId, inviteIds: selectedInviteIds })
+      setStatusMessage('Bidders disabled.')
+      await loadDashboard()
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const bulkEnableBidders = async () => {
+    if (!loadedBidPackageId || selectedInviteIds.length === 0) return
+    setLoading(true)
+    setStatusMessage('Enabling bidders...')
+    try {
+      await bulkEnableInvites({ bidPackageId: loadedBidPackageId, inviteIds: selectedInviteIds })
+      setStatusMessage('Bidders enabled.')
+      await loadDashboard()
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const bulkReopenBids = async () => {
+    if (!loadedBidPackageId || selectedInviteIds.length === 0) return
+
+    const confirmed = window.confirm(
+      `Reopen bids for ${selectedInviteIds.length} selected bidder(s)?\n\nOnly submitted bids will be reopened.`
+    )
+    if (!confirmed) return
+
+    setLoading(true)
+    setStatusMessage('Reopening selected bids...')
+    try {
+      const result = await bulkReopenInvites({ bidPackageId: loadedBidPackageId, inviteIds: selectedInviteIds })
+      const reopenedCount = (result.reopened_ids || []).length
+      const skippedCount = (result.skipped_ids || []).length
+      setStatusMessage(`Reopened ${reopenedCount} bid(s).${skippedCount > 0 ? ` Skipped ${skippedCount} bid(s) that were not submitted.` : ''}`)
+      await loadDashboard()
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const bulkDeleteBidders = async () => {
+    if (!loadedBidPackageId || selectedInviteIds.length === 0) return
+
+    const confirmed = window.confirm(
+      `Delete ${selectedInviteIds.length} selected bidder(s) and associated bids?\n\nThis action cannot be undone.`
+    )
+    if (!confirmed) return
+
+    setLoading(true)
+    setStatusMessage('Deleting selected bidders...')
+    try {
+      const result = await bulkDeleteInvites({ bidPackageId: loadedBidPackageId, inviteIds: selectedInviteIds })
+      const deletedCount = (result.deleted_ids || []).length
+      setStatusMessage(`Deleted ${deletedCount} bidder(s) and associated bids.`)
+      await loadDashboard()
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   useEffect(() => {
     const handleDocClick = (event) => {
       if (event.target.closest('.invite-actions-menu-wrap')) return
       setOpenActionMenuInviteId(null)
+      setBulkActionsOpen(false)
     }
     document.addEventListener('click', handleDocClick)
     return () => document.removeEventListener('click', handleDocClick)
   }, [])
+
+  const allSelected = rows.length > 0 && selectedInviteIds.length === rows.length
+  const anySelected = selectedInviteIds.length > 0
+
+  const toggleInviteSelected = (inviteId) => {
+    setSelectedInviteIds((prev) => (
+      prev.includes(inviteId)
+        ? prev.filter((id) => id !== inviteId)
+        : [...prev, inviteId]
+    ))
+  }
+
+  const toggleAllSelected = () => {
+    setSelectedInviteIds((prev) => (
+      prev.length === rows.length ? [] : rows.map((row) => row.invite_id)
+    ))
+  }
 
   return (
     <div className="stack">
@@ -390,10 +599,87 @@ export default function PackageDashboardPage() {
           <button className="btn btn-primary" onClick={loadDashboard} disabled={!selectedBidPackageId || loading || loadingPackages}>
             Load Bid Package
           </button>
-          <button className="btn btn-danger" onClick={removeBidPackage} disabled={!selectedBidPackageId || loading || loadingPackages}>
-            Delete Bid Package
-          </button>
+          {loadedBidPackageId ? (
+            <button
+              className="btn"
+              onClick={() => setEditingBidPackage(true)}
+              disabled={loading || loadingPackages}
+            >
+              Edit Bid Package
+            </button>
+          ) : null}
+          {loadedPackageSettings?.visibility === 'public' && loadedPackageSettings?.public_url ? (
+            <div className="public-url-inline">
+              <span className="text-muted">Public URL:</span>
+              <a
+                href={`${window.location.origin}${loadedPackageSettings.public_url}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <code>{`${window.location.origin}${loadedPackageSettings.public_url}`}</code>
+              </a>
+              <button className="btn" onClick={copyPublicUrl} disabled={loading}>
+                {copiedPublicUrl ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+          ) : null}
         </div>
+
+        {loadedPackageSettings && editingBidPackage ? (
+          <div className="stack" style={{ marginTop: '0.75rem' }}>
+            <div className="form-grid">
+              <label>
+                Bid Package Name
+                <input value={packageNameDraft} onChange={(event) => setPackageNameDraft(event.target.value)} />
+              </label>
+              <label>
+                Visibility
+                <select value={visibilityDraft} onChange={(event) => setVisibilityDraft(event.target.value)}>
+                  <option value="private">Private</option>
+                  <option value="public">Public</option>
+                </select>
+              </label>
+              <label>
+                Instructions
+                <textarea
+                  value={instructionsDraft}
+                  onChange={(event) => setInstructionsDraft(event.target.value)}
+                  rows={3}
+                  placeholder="Optional bidder instructions"
+                />
+              </label>
+            </div>
+            <div className="checkbox-grid">
+              <p className="text-muted" style={{ margin: 0 }}>Include General Pricing Fields</p>
+              {GENERAL_PRICING_FIELDS.map((field) => (
+                <label key={field.key} className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={activeGeneralFieldsDraft.includes(field.key)}
+                    onChange={(event) => {
+                      setActiveGeneralFieldsDraft((prev) => {
+                        if (event.target.checked) return [...prev, field.key]
+                        return prev.filter((key) => key !== field.key)
+                      })
+                    }}
+                  />
+                  {field.label}
+                </label>
+              ))}
+            </div>
+            <div className="action-row">
+              <button className="btn" onClick={saveBidPackageSettings} disabled={loading || !loadedBidPackageId || !packageNameDraft.trim()}>
+                Save Bid Package
+              </button>
+              <button className="btn btn-danger" onClick={removeBidPackage} disabled={!selectedBidPackageId || loading || loadingPackages}>
+                Delete Bid Package
+              </button>
+              <button className="btn" onClick={() => setEditingBidPackage(false)} disabled={loading}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {statusMessage ? <p className="text-muted">{statusMessage}</p> : null}
       </SectionCard>
@@ -428,12 +714,55 @@ export default function PackageDashboardPage() {
       </SectionCard>
 
       <SectionCard title="Invites">
+        {anySelected ? (
+          <div className="action-row" style={{ marginBottom: '0.6rem' }}>
+            <span className="text-muted">{selectedInviteIds.length} selected</span>
+            <div className="invite-actions-menu-wrap">
+              <button
+                className="btn"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setBulkActionsOpen((prev) => !prev)
+                }}
+                disabled={loading || !loadedBidPackageId}
+              >
+                Bulk Actions
+              </button>
+              {bulkActionsOpen ? (
+                <div className="invite-actions-menu">
+                  <button className="btn invite-actions-item" onClick={() => { bulkReopenBids(); setBulkActionsOpen(false) }}>
+                    Reopen Selected Bids
+                  </button>
+                  <button className="btn invite-actions-item" onClick={() => { bulkEnableBidders(); setBulkActionsOpen(false) }}>
+                    Enable Selected
+                  </button>
+                  <button className="btn invite-actions-item invite-actions-delete" onClick={() => { bulkDisableBidders(); setBulkActionsOpen(false) }}>
+                    Disable Selected
+                  </button>
+                  <button className="btn invite-actions-item invite-actions-delete" onClick={() => { bulkDeleteBidders(); setBulkActionsOpen(false) }}>
+                    Delete Selected Bidders &amp; Bids
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         <table className="table">
           <thead>
             <tr>
+              <th>
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={toggleAllSelected}
+                  disabled={rows.length === 0}
+                  aria-label="Select all invites"
+                />
+              </th>
               <th>Dealer</th>
               <th>Email</th>
               <th>Status</th>
+              <th>Access</th>
               <th>Current Version</th>
               <th>Last Saved</th>
               <th>Submitted</th>
@@ -444,10 +773,28 @@ export default function PackageDashboardPage() {
           <tbody>
             {rows.map((row) => (
               <tr key={row.invite_id}>
+                <td>
+                  <input
+                    type="checkbox"
+                    checked={selectedInviteIds.includes(row.invite_id)}
+                    onChange={() => toggleInviteSelected(row.invite_id)}
+                    aria-label={`Select ${row.dealer_name}`}
+                  />
+                </td>
                 <td>{row.dealer_name}</td>
                 <td>{row.dealer_email || '—'}</td>
                 <td><span className={`pill ${statusClass(row.status)}`}>{row.status}</span></td>
-                <td>{row.current_version > 0 ? `v${row.current_version}` : '—'}</td>
+                <td><span className={`pill ${row.access_state === 'disabled' ? 'muted' : 'ok'}`}>{row.access_state || 'enabled'}</span></td>
+                <td>
+                  <div className="version-cell">
+                    <span>{row.current_version > 0 ? `v${row.current_version}` : '—'}</span>
+                    {row.can_reclose ? (
+                      <button className="btn version-action-btn" onClick={() => recloseBid(row)} disabled={loading}>
+                        Reclose &amp; Lock
+                      </button>
+                    ) : null}
+                  </div>
+                </td>
                 <td>{formatTimestamp(row.last_saved_at)}</td>
                 <td>{formatTimestamp(row.submitted_at)}</td>
                 <td>
@@ -488,17 +835,28 @@ export default function PackageDashboardPage() {
                             Reopen
                           </button>
                         ) : null}
-                        <button className="btn invite-actions-item" onClick={() => { openInviteLink(row); setOpenActionMenuInviteId(null) }}>
-                          View Invite Link
-                        </button>
+                        {row.can_reclose ? (
+                          <button className="btn invite-actions-item" onClick={() => { recloseBid(row); setOpenActionMenuInviteId(null) }}>
+                            Reclose (Use v{row.current_version})
+                          </button>
+                        ) : null}
                         <button className="btn invite-actions-item" onClick={() => { copyInviteLink(row); setOpenActionMenuInviteId(null) }}>
                           {copiedInviteId === row.invite_id ? 'Copied' : 'Copy Invite Link'}
                         </button>
                         <button className="btn invite-actions-item" onClick={() => { emailInvite(row); setOpenActionMenuInviteId(null) }}>
                           Email
                         </button>
+                        {row.access_state === 'disabled' ? (
+                          <button className="btn invite-actions-item" onClick={() => { enableBidder(row); setOpenActionMenuInviteId(null) }}>
+                            Enable Bidder
+                          </button>
+                        ) : (
+                          <button className="btn invite-actions-item invite-actions-delete" onClick={() => { disableBidder(row); setOpenActionMenuInviteId(null) }}>
+                            Disable Bidder
+                          </button>
+                        )}
                         <button className="btn invite-actions-item invite-actions-delete" onClick={() => { removeInvite(row); setOpenActionMenuInviteId(null) }}>
-                          Delete
+                          Delete Bidder &amp; Bid
                         </button>
                       </div>
                     ) : null}
@@ -508,7 +866,7 @@ export default function PackageDashboardPage() {
             ))}
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={8} className="text-muted">No invite rows loaded yet.</td>
+                <td colSpan={10} className="text-muted">No invite rows loaded yet.</td>
               </tr>
             ) : null}
           </tbody>

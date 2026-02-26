@@ -84,4 +84,34 @@ RSpec.describe 'Dealer Bid Flow API', type: :request do
 
     expect(response).to have_http_status(:conflict)
   end
+
+  it 'rejects substitution rows without a unit price' do
+    post "/api/invites/#{invite.token}/unlock",
+         params: { password: 'bidpass123' }.to_json,
+         headers: { 'CONTENT_TYPE' => 'application/json' }
+
+    expect(response).to have_http_status(:ok)
+
+    put "/api/invites/#{invite.token}/bid",
+        params: {
+          line_items: [
+            {
+              spec_item_id: spec_item.id,
+              is_substitution: false,
+              unit_price: '120.00'
+            },
+            {
+              spec_item_id: spec_item.id,
+              is_substitution: true,
+              substitution_product_name: 'Pendant Alt',
+              substitution_brand_name: 'Alt Brand',
+              unit_price: ''
+            }
+          ]
+        }.to_json,
+        headers: { 'CONTENT_TYPE' => 'application/json' }
+
+    expect(response).to have_http_status(:unprocessable_entity)
+    expect(json_response['errors'].join(' ')).to include("Unit price can't be blank")
+  end
 end

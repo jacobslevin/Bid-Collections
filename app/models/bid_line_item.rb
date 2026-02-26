@@ -6,7 +6,8 @@ class BidLineItem < ApplicationRecord
   validates :discount_percent, numericality: { greater_than_or_equal_to: 0, less_than_or_equal_to: 100 }, allow_nil: true
   validates :tariff_percent, numericality: { greater_than_or_equal_to: 0, less_than_or_equal_to: 100 }, allow_nil: true
   validates :lead_time_days, numericality: { greater_than_or_equal_to: 0, only_integer: true }, allow_nil: true
-  validates :spec_item_id, uniqueness: { scope: :bid_id }
+  validates :spec_item_id, uniqueness: { scope: [:bid_id, :is_substitution] }
+  validates :unit_price, presence: true, if: :is_substitution?
 
   def unit_net_price
     return nil if unit_price.nil?
