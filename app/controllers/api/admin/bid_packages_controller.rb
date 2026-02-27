@@ -81,6 +81,52 @@ module Api
         render json: { deleted: true, bid_package_id: bid_package.id }
       end
 
+      def import_rows
+        bid_package = BidPackage.find(params[:id])
+
+        preview = CsvImports::BidPackagePreviewService.new(
+          csv_content: params.require(:csv_content),
+          source_profile: params[:source_profile]
+        ).call
+
+        return render_unprocessable!(preview.errors) unless preview.valid?
+
+        result = CsvImports::BidPackageAppendService.new(
+          bid_package: bid_package,
+          source_filename: params.require(:source_filename),
+          parsed_rows: preview.rows
+        ).call
+
+        if result.success?
+          render json: {
+            bid_package: serialize_bid_package(result.bid_package),
+            imported_items_count: result.imported_items_count
+          }
+        else
+          render_unprocessable!(result.errors)
+        end
+      end
+
+      def deactivate_spec_item
+        bid_package = BidPackage.find(params[:id])
+        spec_item = bid_package.spec_items.find(params[:spec_item_id])
+        spec_item.update!(active: false)
+
+        render json: { deactivated: true, spec_item_id: spec_item.id }
+      rescue ActiveRecord::RecordInvalid => e
+        render_unprocessable!(e.record.errors.full_messages)
+      end
+
+      def reactivate_spec_item
+        bid_package = BidPackage.find(params[:id])
+        spec_item = bid_package.spec_items.find(params[:spec_item_id])
+        spec_item.update!(active: true)
+
+        render json: { reactivated: true, spec_item_id: spec_item.id }
+      rescue ActiveRecord::RecordInvalid => e
+        render_unprocessable!(e.record.errors.full_messages)
+      end
+
       private
 
       def package_settings_params

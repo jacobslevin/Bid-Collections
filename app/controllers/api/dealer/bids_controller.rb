@@ -7,7 +7,7 @@ module Api
       def show
         line_items_by_spec = @bid.bid_line_items.group_by(&:spec_item_id)
 
-        spec_rows = @invite.bid_package.spec_items.order(:id).flat_map do |item|
+        spec_rows = @invite.bid_package.spec_items.active.order(:id).flat_map do |item|
           lines = line_items_by_spec[item.id] || []
           basis_line = lines.find { |line| !line.is_substitution? }
           substitution_line = lines.find(&:is_substitution?)
@@ -41,6 +41,8 @@ module Api
           return render json: { error: 'Bid already submitted and locked' }, status: :conflict
         end
 
+        active_spec_item_ids = @invite.bid_package.spec_items.active.pluck(:id).to_set
+
         ActiveRecord::Base.transaction do
           submitted_keys = {}
 
@@ -67,6 +69,8 @@ module Api
           end
 
           @bid.bid_line_items.each do |line_item|
+            next unless active_spec_item_ids.include?(line_item.spec_item_id)
+
             key = [line_item.spec_item_id, line_item.is_substitution?]
             line_item.destroy! unless submitted_keys[key]
           end

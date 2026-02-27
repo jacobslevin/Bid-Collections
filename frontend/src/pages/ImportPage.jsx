@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import SectionCard from '../components/SectionCard'
-import { createBidPackage, fetchProjects, previewBidPackage } from '../lib/api'
+import { createBidPackage, fetchBidPackages, fetchProjects, importRowsToBidPackage, previewBidPackage } from '../lib/api'
 
 const GENERAL_PRICING_FIELDS = [
-  { key: 'delivery_amount', label: 'Delivery' },
+  { key: 'delivery_amount', label: 'Shipping' },
   { key: 'install_amount', label: 'Install' },
   { key: 'escalation_amount', label: 'Escalation' },
   { key: 'contingency_amount', label: 'Contingency' },
@@ -28,9 +28,13 @@ function readFileText(file) {
 }
 
 export default function ImportPage() {
+  const [importMode, setImportMode] = useState('create_new')
+
   const [packageName, setPackageName] = useState(`Spec Import ${formatDateStamp()}`)
   const [projects, setProjects] = useState([])
+  const [bidPackages, setBidPackages] = useState([])
   const [selectedProjectId, setSelectedProjectId] = useState('')
+  const [selectedExistingPackageId, setSelectedExistingPackageId] = useState('')
   const [loadingProjects, setLoadingProjects] = useState(false)
 
   const [selectedFile, setSelectedFile] = useState(null)
@@ -47,14 +51,18 @@ export default function ImportPage() {
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    const loadProjects = async () => {
+    const loadData = async () => {
       setLoadingProjects(true)
       try {
-        const data = await fetchProjects()
-        const list = data.projects || []
-        setProjects(list)
-        if (list.length > 0) {
-          setSelectedProjectId(String(list[0].id))
+        const [projectData, packageData] = await Promise.all([fetchProjects(), fetchBidPackages()])
+        const projectList = projectData.projects || []
+        const packageList = packageData.bid_packages || []
+
+        setProjects(projectList)
+        setBidPackages(packageList)
+
+        if (projectList.length > 0) {
+          setSelectedProjectId(String(projectList[0].id))
         }
       } catch (error) {
         setStatusMessage(error.message)
@@ -63,13 +71,35 @@ export default function ImportPage() {
       }
     }
 
-    loadProjects()
+    loadData()
   }, [])
+
+  const filteredExistingPackages = useMemo(
+    () => bidPackages.filter((pkg) => String(pkg.project_id) === String(selectedProjectId)),
+    [bidPackages, selectedProjectId]
+  )
+
+  useEffect(() => {
+    if (importMode !== 'add_existing') return
+
+    if (!filteredExistingPackages.length) {
+      setSelectedExistingPackageId('')
+      return
+    }
+
+    if (!filteredExistingPackages.some((pkg) => String(pkg.id) === String(selectedExistingPackageId))) {
+      setSelectedExistingPackageId(String(filteredExistingPackages[0].id))
+    }
+  }, [filteredExistingPackages, importMode, selectedExistingPackageId])
 
   const canPreview = useMemo(() => csvContent && selectedProjectId, [csvContent, selectedProjectId])
   const canCreate = useMemo(
-    () => canPreview && previewResult?.valid && packageName && selectedProjectId,
-    [canPreview, previewResult, packageName, selectedProjectId]
+    () => importMode === 'create_new' && canPreview && previewResult?.valid && packageName && selectedProjectId,
+    [canPreview, importMode, previewResult, packageName, selectedProjectId]
+  )
+  const canAddToExisting = useMemo(
+    () => importMode === 'add_existing' && canPreview && previewResult?.valid && selectedExistingPackageId,
+    [canPreview, importMode, previewResult, selectedExistingPackageId]
   )
 
   const handleFilePick = async (event) => {
@@ -118,6 +148,14 @@ export default function ImportPage() {
     }
   }
 
+  const handleModeChange = (mode) => {
+    setImportMode(mode)
+    setPreviewResult(null)
+    setPreviewErrors([])
+    setCreateResult(null)
+    setStatusMessage('')
+  }
+
   const handleCreatePackage = async () => {
     if (!canCreate || !selectedFile) return
 
@@ -144,9 +182,52 @@ export default function ImportPage() {
     }
   }
 
+  const handleAddToExistingPackage = async () => {
+    if (!canAddToExisting || !selectedFile) return
+
+    setLoading(true)
+    setStatusMessage('Adding rows to existing bid package...')
+
+    try {
+      const result = await importRowsToBidPackage({
+        bidPackageId: selectedExistingPackageId,
+        sourceFilename: selectedFile.name,
+        csvContent,
+        sourceProfile: 'designer_pages'
+      })
+      setCreateResult(result)
+      setStatusMessage(`Added ${result.imported_items_count} items to package #${result.bid_package.id}.`)
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <div className="stack">
       <SectionCard title="Import Bid Package">
+        <div className="import-mode-tabs" role="tablist" aria-label="Import mode">
+          <button
+            className={`import-mode-tab ${importMode === 'create_new' ? 'active' : ''}`}
+            type="button"
+            role="tab"
+            aria-selected={importMode === 'create_new'}
+            onClick={() => handleModeChange('create_new')}
+          >
+            Create New Bid Package
+          </button>
+          <button
+            className={`import-mode-tab ${importMode === 'add_existing' ? 'active' : ''}`}
+            type="button"
+            role="tab"
+            aria-selected={importMode === 'add_existing'}
+            onClick={() => handleModeChange('add_existing')}
+          >
+            Add to Existing Bid Package
+          </button>
+        </div>
+
         <div className="form-grid">
           <label>
             Project Name
@@ -161,46 +242,66 @@ export default function ImportPage() {
               ))}
             </select>
           </label>
-          <label>
-            Bid Package Name
-            <input value={packageName} onChange={(event) => setPackageName(event.target.value)} placeholder="Furniture Package A" />
-          </label>
-          <label>
-            Visibility
-            <select value={visibility} onChange={(event) => setVisibility(event.target.value)}>
-              <option value="private">Private</option>
-              <option value="public">Public</option>
-            </select>
-          </label>
-          <label>
-            Instructions
-            <textarea
-              value={instructions}
-              onChange={(event) => setInstructions(event.target.value)}
-              rows={3}
-              placeholder="Optional bidder instructions"
-            />
-          </label>
+          {importMode === 'create_new' ? (
+            <>
+              <label>
+                Bid Package Name
+                <input value={packageName} onChange={(event) => setPackageName(event.target.value)} placeholder="Furniture Package A" />
+              </label>
+              <label>
+                Visibility
+                <select value={visibility} onChange={(event) => setVisibility(event.target.value)}>
+                  <option value="private">Private</option>
+                  <option value="public">Public</option>
+                </select>
+              </label>
+              <label>
+                Instructions
+                <textarea
+                  value={instructions}
+                  onChange={(event) => setInstructions(event.target.value)}
+                  rows={3}
+                  placeholder="Optional bidder instructions"
+                />
+              </label>
+            </>
+          ) : (
+            <label>
+              Existing Bid Package
+              <select
+                value={selectedExistingPackageId}
+                onChange={(event) => setSelectedExistingPackageId(event.target.value)}
+                disabled={!selectedProjectId || filteredExistingPackages.length === 0}
+              >
+                {filteredExistingPackages.length === 0 ? <option value="">No bid packages for this project</option> : null}
+                {filteredExistingPackages.map((pkg) => (
+                  <option key={pkg.id} value={pkg.id}>{pkg.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
 
-        <div className="checkbox-grid">
-          <p className="text-muted" style={{ margin: 0 }}>Include General Pricing Fields</p>
-          {GENERAL_PRICING_FIELDS.map((field) => (
-            <label key={field.key} className="checkbox-row">
-              <input
-                type="checkbox"
-                checked={activeGeneralFields.includes(field.key)}
-                onChange={(event) => {
-                  setActiveGeneralFields((prev) => {
-                    if (event.target.checked) return [...prev, field.key]
-                    return prev.filter((key) => key !== field.key)
-                  })
-                }}
-              />
-              {field.label}
-            </label>
-          ))}
-        </div>
+        {importMode === 'create_new' ? (
+          <div className="checkbox-grid">
+            <p className="text-muted" style={{ margin: 0 }}>Include General Pricing Fields</p>
+            {GENERAL_PRICING_FIELDS.map((field) => (
+              <label key={field.key} className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={activeGeneralFields.includes(field.key)}
+                  onChange={(event) => {
+                    setActiveGeneralFields((prev) => {
+                      if (event.target.checked) return [...prev, field.key]
+                      return prev.filter((key) => key !== field.key)
+                    })
+                  }}
+                />
+                {field.label}
+              </label>
+            ))}
+          </div>
+        ) : null}
 
         <label className="dropzone">
           <input type="file" accept=".csv,text/csv" onChange={handleFilePick} style={{ display: 'none' }} />
@@ -209,9 +310,15 @@ export default function ImportPage() {
 
         <div className="action-row" style={{ marginBottom: '0.75rem' }}>
           <button className="btn" onClick={handlePreview} disabled={!canPreview || loading}>Preview CSV</button>
-          <button className="btn btn-primary" onClick={handleCreatePackage} disabled={!canCreate || loading}>
-            Create Bid Package
-          </button>
+          {importMode === 'create_new' ? (
+            <button className="btn btn-primary" onClick={handleCreatePackage} disabled={!canCreate || loading}>
+              Create Bid Package
+            </button>
+          ) : (
+            <button className="btn btn-primary" onClick={handleAddToExistingPackage} disabled={!canAddToExisting || loading}>
+              Add to Existing Package
+            </button>
+          )}
         </div>
 
         {statusMessage ? <p className="text-muted">{statusMessage}</p> : null}

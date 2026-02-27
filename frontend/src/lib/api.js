@@ -75,6 +75,22 @@ export async function createBidPackage({
   })
 }
 
+export async function importRowsToBidPackage({
+  bidPackageId,
+  sourceFilename,
+  csvContent,
+  sourceProfile
+}) {
+  return request(`/api/bid_packages/${bidPackageId}/import_rows`, {
+    method: 'POST',
+    body: JSON.stringify({
+      source_filename: sourceFilename,
+      csv_content: csvContent,
+      source_profile: sourceProfile
+    })
+  })
+}
+
 export async function fetchBidPackageDashboard(bidPackageId) {
   return request(`/api/bid_packages/${bidPackageId}/dashboard`)
 }
@@ -86,6 +102,20 @@ export async function fetchBidPackages() {
 export async function deleteBidPackage(bidPackageId) {
   return request(`/api/bid_packages/${bidPackageId}`, {
     method: 'DELETE'
+  })
+}
+
+export async function deactivateSpecItem({ bidPackageId, specItemId }) {
+  return request(`/api/bid_packages/${bidPackageId}/spec_items/${specItemId}/deactivate`, {
+    method: 'PATCH',
+    body: JSON.stringify({})
+  })
+}
+
+export async function reactivateSpecItem({ bidPackageId, specItemId }) {
+  return request(`/api/bid_packages/${bidPackageId}/spec_items/${specItemId}/reactivate`, {
+    method: 'PATCH',
+    body: JSON.stringify({})
   })
 }
 
@@ -192,7 +222,14 @@ export async function fetchComparison(bidPackageId) {
   return request(`/api/bid_packages/${bidPackageId}/comparison`)
 }
 
-export function comparisonExportUrl(bidPackageId, dealerPriceMode = {}, format = 'csv', excludedSpecItemIds = []) {
+export function comparisonExportUrl(
+  bidPackageId,
+  dealerPriceMode = {},
+  format = 'csv',
+  excludedSpecItemIds = [],
+  comparisonMode = 'average',
+  columnOptions = {}
+) {
   const params = new URLSearchParams()
   Object.entries(dealerPriceMode || {}).forEach(([inviteId, mode]) => {
     if (mode === 'alt' || mode === 'bod') {
@@ -204,6 +241,13 @@ export function comparisonExportUrl(bidPackageId, dealerPriceMode = {}, format =
       params.append('excluded_spec_item_ids[]', String(specItemId))
     }
   })
+  if (comparisonMode) {
+    params.append('comparison_mode', comparisonMode)
+  }
+  params.append('show_product', String(columnOptions.showProduct ?? true))
+  params.append('show_brand', String(columnOptions.showBrand ?? true))
+  params.append('show_lead_time', String(columnOptions.showLeadTime ?? false))
+  params.append('show_notes', String(columnOptions.showNotes ?? false))
   const query = params.toString()
   return `${API_BASE_URL}/api/bid_packages/${bidPackageId}/export.${format}${query ? `?${query}` : ''}`
 }

@@ -34,6 +34,17 @@ module Api
             active_general_fields: bid_package.active_general_fields,
             public_url: bid_package.visibility_public? ? "/public/bid-packages/#{bid_package.public_token}" : nil
           },
+          spec_items: bid_package.spec_items.order(:id).map do |item|
+            {
+              id: item.id,
+              active: item.active?,
+              code_tag: item.sku,
+              product_name: item.product_name,
+              brand_name: item.manufacturer,
+              quantity: item.quantity,
+              uom: item.uom
+            }
+          end,
           invites: rows
         }
       end

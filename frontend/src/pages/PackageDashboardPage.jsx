@@ -6,6 +6,8 @@ import {
   bulkEnableInvites,
   bulkReopenInvites,
   createInvite,
+  deactivateSpecItem,
+  reactivateSpecItem,
   disableInvite,
   deleteBidPackage,
   deleteInvite,
@@ -21,7 +23,7 @@ import {
 import vendors from '../data/vendors.json'
 
 const GENERAL_PRICING_FIELDS = [
-  { key: 'delivery_amount', label: 'Delivery' },
+  { key: 'delivery_amount', label: 'Shipping' },
   { key: 'install_amount', label: 'Install' },
   { key: 'escalation_amount', label: 'Escalation' },
   { key: 'contingency_amount', label: 'Contingency' },
@@ -77,6 +79,7 @@ export default function PackageDashboardPage() {
   const [selectedBidPackageId, setSelectedBidPackageId] = useState('')
   const [loadedBidPackageId, setLoadedBidPackageId] = useState('')
   const [rows, setRows] = useState([])
+  const [specItems, setSpecItems] = useState([])
   const [statusMessage, setStatusMessage] = useState('')
   const [loading, setLoading] = useState(false)
   const [loadingPackages, setLoadingPackages] = useState(false)
@@ -114,6 +117,7 @@ export default function PackageDashboardPage() {
         setSelectedBidPackageId('')
         setLoadedBidPackageId('')
         setRows([])
+        setSpecItems([])
         return
       }
 
@@ -143,7 +147,7 @@ export default function PackageDashboardPage() {
     return `${match.name} in ${projectName} (Bid Package ID: ${match.id}, Project ID: ${projectId})`
   }, [bidPackages, loadedBidPackageId])
 
-  const loadDashboard = async () => {
+  const loadDashboard = async ({ closeEdit = true } = {}) => {
     if (!selectedBidPackageId) return
 
     setLoading(true)
@@ -151,8 +155,10 @@ export default function PackageDashboardPage() {
     try {
       const data = await fetchBidPackageDashboard(selectedBidPackageId)
       const invites = data.invites || []
+      const activeSpecItems = data.spec_items || []
       const bidPackage = data.bid_package || null
       setRows(invites)
+      setSpecItems(activeSpecItems)
       setSelectedInviteIds([])
       setBulkActionsOpen(false)
       setLoadedPackageSettings(bidPackage)
@@ -160,7 +166,7 @@ export default function PackageDashboardPage() {
       setVisibilityDraft(bidPackage?.visibility || 'private')
       setInstructionsDraft(bidPackage?.instructions || '')
       setActiveGeneralFieldsDraft(bidPackage?.active_general_fields || GENERAL_PRICING_FIELDS.map((field) => field.key))
-      setEditingBidPackage(false)
+      if (closeEdit) setEditingBidPackage(false)
       setPasswordDrafts(
         invites.reduce((acc, invite) => {
           acc[invite.invite_id] = invite.invite_password || ''
@@ -172,6 +178,7 @@ export default function PackageDashboardPage() {
     } catch (error) {
       setStatusMessage(error.message)
       setRows([])
+      setSpecItems([])
     } finally {
       setLoading(false)
     }
@@ -389,6 +396,7 @@ export default function PackageDashboardPage() {
       setLoadedBidPackageId((prev) => (String(prev) === String(selectedBidPackageId) ? '' : prev))
       if (String(loadedBidPackageId) === String(selectedBidPackageId)) {
         setRows([])
+        setSpecItems([])
       }
       await loadBidPackages(false)
     } catch (error) {
@@ -414,6 +422,43 @@ export default function PackageDashboardPage() {
       await loadBidPackages(false)
       await loadDashboard()
       setEditingBidPackage(false)
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const removeSpecItem = async (item) => {
+    if (!loadedBidPackageId) return
+
+    const confirmed = window.confirm(
+      `Deactivate ${item.code_tag || item.id} in this bid package?\n\nThis hides it from bidder and comparison views.`
+    )
+    if (!confirmed) return
+
+    setLoading(true)
+    setStatusMessage('Deactivating line item in bid package...')
+    try {
+      await deactivateSpecItem({ bidPackageId: loadedBidPackageId, specItemId: item.id })
+      setStatusMessage('Line item deactivated in bid package.')
+      await loadDashboard({ closeEdit: false })
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const reactivateItem = async (item) => {
+    if (!loadedBidPackageId) return
+
+    setLoading(true)
+    setStatusMessage('Re-activating line item...')
+    try {
+      await reactivateSpecItem({ bidPackageId: loadedBidPackageId, specItemId: item.id })
+      setStatusMessage('Line item re-activated.')
+      await loadDashboard({ closeEdit: false })
     } catch (error) {
       setStatusMessage(error.message)
     } finally {
@@ -678,6 +723,48 @@ export default function PackageDashboardPage() {
                 Cancel
               </button>
             </div>
+
+            <SectionCard title="Line Items In Package">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Code/Tag</th>
+                    <th>Product</th>
+                    <th>Brand</th>
+                    <th>Qty/UOM</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {specItems.map((item) => (
+                    <tr key={item.id} className={!item.active ? 'spec-item-inactive-row' : ''}>
+                      <td>{item.code_tag || '—'}</td>
+                      <td>{item.product_name || '—'}</td>
+                      <td>{item.brand_name || '—'}</td>
+                      <td>{item.quantity || '—'} {item.uom || ''}</td>
+                      <td>{item.active ? 'Active' : 'Removed'}</td>
+                      <td>
+                        {item.active ? (
+                          <button className="btn btn-danger" onClick={() => removeSpecItem(item)} disabled={loading}>
+                            Deactivate
+                          </button>
+                        ) : (
+                          <button className="btn" onClick={() => reactivateItem(item)} disabled={loading}>
+                            Re-activate
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {specItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="text-muted">No line items in this package.</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </SectionCard>
           </div>
         ) : null}
 

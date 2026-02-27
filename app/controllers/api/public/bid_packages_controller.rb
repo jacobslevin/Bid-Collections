@@ -15,7 +15,7 @@ module Api
             instructions: bid_package.instructions,
             active_general_fields: bid_package.active_general_fields,
             visibility: bid_package.visibility,
-            line_items: bid_package.spec_items.order(:id).map do |item|
+            line_items: bid_package.spec_items.active.order(:id).map do |item|
               {
                 spec_item_id: item.id,
                 code_tag: item.sku,

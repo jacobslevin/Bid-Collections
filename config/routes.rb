@@ -12,6 +12,12 @@ Rails.application.routes.draw do
       end
 
       resources :bid_packages, only: [:index, :destroy, :update] do
+        member do
+          post :import_rows
+          patch 'spec_items/:spec_item_id/deactivate', to: 'bid_packages#deactivate_spec_item'
+          patch 'spec_items/:spec_item_id/reactivate', to: 'bid_packages#reactivate_spec_item'
+        end
+
         resources :invites, only: [:create, :destroy] do
           collection do
             post :bulk_disable

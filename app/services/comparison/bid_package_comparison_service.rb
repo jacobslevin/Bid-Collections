@@ -20,7 +20,7 @@ module Comparison
         }
       end
 
-      rows = @bid_package.spec_items
+      rows = @bid_package.spec_items.active
                          .where.not(id: @excluded_spec_item_ids)
                          .order(:id)
                          .map do |spec_item|
@@ -38,10 +38,14 @@ module Comparison
             unit_price: price,
             delta: avg && price ? (price - avg).round(4) : nil,
             quote_type: details[:selected_line].present? ? (details[:selected_line].is_substitution? ? 'alt' : 'bod') : nil,
+            lead_time_days: details[:selected_line]&.lead_time_days,
+            dealer_notes: details[:selected_line]&.dealer_notes,
             has_bod_price: details[:basis_line].present?,
             has_alt_price: details[:substitution_line].present?,
             bod_unit_price: details[:basis_line]&.unit_net_price,
             alt_unit_price: details[:substitution_line]&.unit_net_price,
+            selected_alt_product_name: details[:selected_line]&.is_substitution? ? details[:selected_line]&.substitution_product_name : nil,
+            selected_alt_brand_name: details[:selected_line]&.is_substitution? ? details[:selected_line]&.substitution_brand_name : nil,
             alt_product_name: details[:substitution_line]&.substitution_product_name,
             alt_brand_name: details[:substitution_line]&.substitution_brand_name
           }

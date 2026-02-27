@@ -3,6 +3,8 @@ class SpecItem < ApplicationRecord
 
   has_many :bid_line_items, dependent: :destroy
 
+  scope :active, -> { where(active: true) }
+
   validates :spec_item_id, :category, :manufacturer, :product_name,
             :quantity, :uom, presence: true
   validates :quantity, numericality: { greater_than: 0 }

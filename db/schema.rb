@@ -10,12 +10,12 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.1].define(version: 2026_02_26_120000) do
+ActiveRecord::Schema[7.1].define(version: 2026_02_26_170000) do
   create_table "bid_line_items", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "bid_id", null: false
     t.bigint "spec_item_id", null: false
     t.decimal "unit_price", precision: 12, scale: 4
-    t.integer "lead_time_days"
+    t.string "lead_time_days"
     t.text "dealer_notes"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
@@ -122,6 +122,8 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_26_120000) do
     t.text "notes"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.boolean "active", default: true, null: false
+    t.index ["bid_package_id", "active"], name: "index_spec_items_on_bid_package_id_and_active"
     t.index ["bid_package_id", "sku"], name: "index_spec_items_on_bid_package_id_and_sku"
     t.index ["bid_package_id", "spec_item_id"], name: "index_spec_items_on_bid_package_id_and_spec_item_id", unique: true
     t.index ["bid_package_id"], name: "index_spec_items_on_bid_package_id"

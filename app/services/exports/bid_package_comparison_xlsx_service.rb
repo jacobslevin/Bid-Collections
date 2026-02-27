@@ -1,9 +1,23 @@
 module Exports
   class BidPackageComparisonXlsxService
-    def initialize(bid_package:, price_modes: {}, excluded_spec_item_ids: [])
+    def initialize(
+      bid_package:,
+      price_modes: {},
+      excluded_spec_item_ids: [],
+      comparison_mode: 'average',
+      show_product: true,
+      show_brand: true,
+      show_lead_time: false,
+      show_notes: false
+    )
       @bid_package = bid_package
       @price_modes = price_modes || {}
       @excluded_spec_item_ids = Array(excluded_spec_item_ids).map(&:to_i).uniq
+      @comparison_mode = comparison_mode.to_s
+      @show_product = show_product
+      @show_brand = show_brand
+      @show_lead_time = show_lead_time
+      @show_notes = show_notes
     end
 
     def call
@@ -27,8 +41,8 @@ module Exports
         currency_style = workbook.styles.add_style(num_fmt: 5)
         percent_style = workbook.styles.add_style(format_code: '0.00%')
 
-        base_count = 6
-        per_dealer_count = 4
+        base_count = base_headers.length
+        per_dealer_count = dealer_column_count
         total_columns = base_count + (dealers.length * per_dealer_count)
 
         group_headers = Array.new(total_columns, '')
@@ -51,8 +65,25 @@ module Exports
           sheet.add_row(values, types: types, style: styles)
         end
 
-        base_widths = [11, 20, 16, 10, 11, 12]
-        dealer_widths = dealers.flat_map { [11, 9, 12, 11] }
+        base_widths = []
+        base_widths << 11 # code tag
+        base_widths << 20 if @show_product
+        base_widths << 16 if @show_brand
+        base_widths << 10 # qty/uom
+        if include_average_columns?
+          base_widths << 11
+          base_widths << 12
+        end
+
+        dealer_widths = dealers.flat_map do
+          widths = [11] # unit
+          widths << 11 if @show_lead_time
+          widths << 20 if @show_notes
+          widths << 9  # quote type
+          widths << 12 # extended
+          widths << 11 if include_delta_column?
+          widths
+        end
         sheet.column_widths(*(base_widths + dealer_widths))
 
         sheet.sheet_view.pane do |pane|
@@ -68,37 +99,45 @@ module Exports
     private
 
     def build_headers(dealers)
-      headers = [
-        'code_tag', 'product', 'brand', 'qty_uom', 'avg_unit_price', 'avg_extended_price'
-      ]
+      headers = base_headers.dup
 
       dealers.each do |_dealer|
         headers << 'unit_price'
+        headers << 'lead_time_days' if @show_lead_time
+        headers << 'notes' if @show_notes
         headers << 'quote_type'
         headers << 'extended_price'
-        headers << 'percent_avg_delta'
+        headers << 'percent_avg_delta' if include_delta_column?
       end
 
       headers.map { |value| format_header_label(value) }
     end
 
     def build_row(row, dealers, currency_style, percent_style)
-      base_values = [
-        row[:sku],
-        row[:product_name],
-        row[:manufacturer],
-        qty_uom(row[:quantity], row[:uom]),
-        numeric_or_nil(row[:avg_unit_price]),
-        extended_price(row[:avg_unit_price], row[:quantity])
-      ]
+      base_values = [row[:sku]]
+      types = [:string]
+      styles = [nil]
 
-      types = [
-        :string, :string, :string, :string, :float, :float
-      ]
+      if @show_product
+        base_values << row[:product_name]
+        types << :string
+        styles << nil
+      end
+      if @show_brand
+        base_values << row[:manufacturer]
+        types << :string
+        styles << nil
+      end
+      base_values << qty_uom(row[:quantity], row[:uom])
+      types << :string
+      styles << nil
 
-      styles = Array.new(base_values.length)
-      styles[4] = currency_style
-      styles[5] = currency_style
+      if include_average_columns?
+        base_values << numeric_or_nil(row[:avg_unit_price])
+        base_values << extended_price(row[:avg_unit_price], row[:quantity])
+        types.concat([:float, :float])
+        styles.concat([currency_style, currency_style])
+      end
 
       dealers.each do |dealer|
         cell = row[:dealers].find { |d| d[:invite_id] == dealer[:invite_id] }
@@ -107,15 +146,63 @@ module Exports
         delta_ratio = percent_avg_delta_ratio(unit_price, avg_price)
 
         base_values << unit_price
+        base_values << (cell&.dig(:lead_time_days) || nil) if @show_lead_time
+        base_values << (cell&.dig(:dealer_notes) || nil) if @show_notes
         base_values << quote_type_label(cell)
         base_values << extended_price(unit_price, row[:quantity])
-        base_values << delta_ratio
+        base_values << delta_ratio if include_delta_column?
 
-        types.concat([:float, :string, :float, :float])
-        styles.concat([currency_style, nil, currency_style, percent_style])
+        types << :float
+        styles << currency_style
+        if @show_lead_time
+          types << :string
+          styles << nil
+        end
+        if @show_notes
+          types << :string
+          styles << nil
+        end
+        types << :string
+        styles << nil
+        types << :float
+        styles << currency_style
+        if include_delta_column?
+          types << :float
+          styles << percent_style
+        end
       end
 
       [base_values, types, styles]
+    end
+
+    def base_headers
+      headers = ['code_tag']
+      headers << 'product' if @show_product
+      headers << 'brand' if @show_brand
+      headers << 'qty_uom'
+      if include_average_columns?
+        headers << 'avg_unit_price'
+        headers << 'avg_extended_price'
+      end
+      headers
+    end
+
+    def dealer_column_count
+      count = 1 # unit
+      count += 1 if @show_lead_time
+      count += 1 if @show_notes
+      count += 1 # quote_type
+      count += 1 # extended
+      count += 1 if include_delta_column?
+      count
+    end
+
+    def include_average_columns?
+      @comparison_mode == 'average'
+    end
+
+    def include_delta_column?
+      @comparison_mode != 'none'
     end
 
     def numeric_or_nil(value)

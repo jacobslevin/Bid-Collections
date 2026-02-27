@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import SectionCard from '../components/SectionCard'
 import { comparisonExportUrl, fetchBidPackages, fetchComparison } from '../lib/api'
 
@@ -60,8 +60,13 @@ export default function ComparisonPage() {
   const [data, setData] = useState({ dealers: [], rows: [] })
   const [visibleDealerIds, setVisibleDealerIds] = useState([])
   const [responderSort, setResponderSort] = useState('lowest_bid')
-  const [comparisonMode, setComparisonMode] = useState('average')
+  const [comparisonMode, setComparisonMode] = useState('none')
+  const [showProductColumn, setShowProductColumn] = useState(true)
+  const [showBrandColumn, setShowBrandColumn] = useState(true)
+  const [showLeadTimeColumn, setShowLeadTimeColumn] = useState(false)
+  const [showDealerNotesColumn, setShowDealerNotesColumn] = useState(false)
   const [activeSubPopoverKey, setActiveSubPopoverKey] = useState(null)
+  const [activeNotePopoverKey, setActiveNotePopoverKey] = useState(null)
   const [rowSort, setRowSort] = useState({ key: 'sku', direction: 'asc', inviteId: null })
   const [dealerPriceMode, setDealerPriceMode] = useState({})
   const [excludedRowIds, setExcludedRowIds] = useState([])
@@ -75,6 +80,11 @@ export default function ComparisonPage() {
   const [statusMessage, setStatusMessage] = useState('')
   const [loading, setLoading] = useState(false)
   const [loadingPackages, setLoadingPackages] = useState(false)
+  const tableScrollRef = useRef(null)
+  const tableInnerRef = useRef(null)
+  const [scrollMax, setScrollMax] = useState(0)
+  const [isDraggingTable, setIsDraggingTable] = useState(false)
+  const dragStateRef = useRef({ active: false, startX: 0, startLeft: 0 })
 
   useEffect(() => {
     const loadBidPackages = async () => {
@@ -283,9 +293,12 @@ export default function ComparisonPage() {
   const bestDealerSalesTax = visibleSalesTaxes.length > 0 ? Math.min(...visibleSalesTaxes) : null
   const bestDealerTotal = visibleTotals.length > 0 ? Math.min(...visibleTotals) : null
   const showNextBestDeltaColumn = visibleDealers.length >= 2
-  const dealerColumnsPerResponder = comparisonMode === 'competitive'
-    ? (showNextBestDeltaColumn ? 4 : 3)
-    : 3
+  const showAverageColumns = comparisonMode === 'average'
+  const showDealerDeltaColumn = comparisonMode === 'average' || comparisonMode === 'competitive'
+  const showDealerNextDeltaColumn = comparisonMode === 'competitive' && showNextBestDeltaColumn
+  const metricColumnsPerResponder = 2 + (showDealerDeltaColumn ? 1 : 0) + (showDealerNextDeltaColumn ? 1 : 0)
+  const optionalColumnsPerResponder = (showLeadTimeColumn ? 1 : 0) + (showDealerNotesColumn ? 1 : 0)
+  const dealerColumnsPerResponder = metricColumnsPerResponder + optionalColumnsPerResponder
 
   const rowVisibleDealerPrices = (row) => (
     visibleDealers
@@ -467,18 +480,117 @@ export default function ComparisonPage() {
   }
 
   useEffect(() => {
-    const closePopover = () => setActiveSubPopoverKey(null)
+    const closePopover = () => {
+      setActiveSubPopoverKey(null)
+      setActiveNotePopoverKey(null)
+    }
     document.addEventListener('click', closePopover)
     return () => document.removeEventListener('click', closePopover)
   }, [])
 
+  useEffect(() => {
+    const updateScrollMetrics = () => {
+      const tableWrap = tableScrollRef.current
+      const tableInner = tableInnerRef.current
+      const tableEl = tableInner?.querySelector('table')
+      if (!tableWrap) return
+      const contentWidth = Math.max(
+        tableInner ? tableInner.scrollWidth : 0,
+        tableEl ? Math.ceil(tableEl.getBoundingClientRect().width) : 0,
+        tableWrap.scrollWidth
+      )
+      const max = Math.max(contentWidth - tableWrap.clientWidth, 0)
+      setScrollMax(max)
+    }
+
+    updateScrollMetrics()
+    window.addEventListener('resize', updateScrollMetrics)
+
+    let observer = null
+    if (window.ResizeObserver && tableScrollRef.current) {
+      observer = new ResizeObserver(updateScrollMetrics)
+      observer.observe(tableScrollRef.current)
+      if (tableInnerRef.current) observer.observe(tableInnerRef.current)
+    }
+
+    return () => {
+      window.removeEventListener('resize', updateScrollMetrics)
+      if (observer) observer.disconnect()
+    }
+  }, [sortedRows.length, visibleDealers.length, comparisonMode, showProductColumn, showBrandColumn, showLeadTimeColumn, showDealerNotesColumn])
+
+  const syncFromTable = () => {
+    return
+  }
+
+  const nudgeHorizontalScroll = (distance) => {
+    const table = tableScrollRef.current
+    if (!table) return
+    table.scrollBy({ left: distance, behavior: 'smooth' })
+  }
+
+  const handleTableMouseDown = (event) => {
+    if (scrollMax <= 0) return
+    const table = tableScrollRef.current
+    if (!table) return
+    dragStateRef.current = {
+      active: true,
+      startX: event.clientX,
+      startLeft: table.scrollLeft
+    }
+    setIsDraggingTable(true)
+  }
+
+  const handleTableMouseMove = (event) => {
+    if (!dragStateRef.current.active) return
+    const table = tableScrollRef.current
+    if (!table) return
+    event.preventDefault()
+    const deltaX = event.clientX - dragStateRef.current.startX
+    table.scrollLeft = dragStateRef.current.startLeft - deltaX
+  }
+
+  const stopTableDragging = () => {
+    if (!dragStateRef.current.active) return
+    dragStateRef.current.active = false
+    setIsDraggingTable(false)
+  }
+
   const handleExportChange = (format) => {
     if (!loadedBidPackageId || !format) return
-    const url = comparisonExportUrl(loadedBidPackageId, dealerPriceMode, format, excludedRowIds)
+    const url = comparisonExportUrl(
+      loadedBidPackageId,
+      dealerPriceMode,
+      format,
+      excludedRowIds,
+      comparisonMode,
+      {
+        showProduct: showProductColumn,
+        showBrand: showBrandColumn,
+        showLeadTime: showLeadTimeColumn,
+        showNotes: showDealerNotesColumn
+      }
+    )
     window.open(url, '_blank', 'noopener,noreferrer')
   }
 
-  const baseColumnsBeforeDealers = comparisonMode === 'competitive' ? 5 : 7
+  const labelColumnsBeforeAverages = 3 + (showProductColumn ? 1 : 0) + (showBrandColumn ? 1 : 0)
+  const baseColumnsBeforeDealers = labelColumnsBeforeAverages + (showAverageColumns ? 2 : 0)
+  const baseTableMinWidth =
+    70 + // Use
+    130 + // Code/Tag
+    (showProductColumn ? 220 : 0) +
+    (showBrandColumn ? 180 : 0) +
+    120 + // Qty/UOM
+    (showAverageColumns ? (130 + 160) : 0) // Avg Unit + Avg Extended
+  const perDealerMinWidth =
+    130 + // Unit
+    (showLeadTimeColumn ? 110 : 0) +
+    (showDealerNotesColumn ? 110 : 0) +
+    150 + // Extended
+    (showDealerDeltaColumn ? 120 : 0) + // Delta
+    (showDealerNextDeltaColumn ? 120 : 0)
+  const tableMinWidth = baseTableMinWidth + (visibleDealers.length * perDealerMinWidth) + 40
 
   return (
     <div className="stack">
@@ -540,9 +652,11 @@ export default function ComparisonPage() {
                   <span className={`completion-pill ${summaryCopy.completionPct >= 100 ? 'complete' : 'incomplete'}`}>
                     {summaryCopy.completionPct.toFixed(0)}% complete
                   </span>
-                  <span className="completion-pill warning">
-                    {summaryCopy.bodSkippedPct.toFixed(0)}% BoD skipped
-                  </span>
+                  {summaryCopy.bodSkippedPct > 0 ? (
+                    <span className="completion-pill warning">
+                      {summaryCopy.bodSkippedPct.toFixed(0)}% BoD skipped
+                    </span>
+                  ) : null}
                   {(dealerQuoteCountsById[dealer.invite_id]?.mixedLineCount || 0) > 0 ? (
                     <span className="summary-toggle-row">
                       <span className="quote-toggle">
@@ -586,9 +700,43 @@ export default function ComparisonPage() {
         actions={
           loadedBidPackageId ? (
             <div className="action-row">
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={showProductColumn}
+                  onChange={(event) => setShowProductColumn(event.target.checked)}
+                />
+                Product
+              </label>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={showBrandColumn}
+                  onChange={(event) => setShowBrandColumn(event.target.checked)}
+                />
+                Brand
+              </label>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={showLeadTimeColumn}
+                  onChange={(event) => setShowLeadTimeColumn(event.target.checked)}
+                />
+                Lead Time
+              </label>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={showDealerNotesColumn}
+                  onChange={(event) => setShowDealerNotesColumn(event.target.checked)}
+                />
+                Notes
+              </label>
+              <span className="action-separator" aria-hidden="true">|</span>
               <label>
                 Comparison
                 <select value={comparisonMode} onChange={(event) => setComparisonMode(event.target.value)}>
+                  <option value="none">None</option>
                   <option value="average">Average</option>
                   <option value="competitive">Competitive</option>
                 </select>
@@ -611,7 +759,36 @@ export default function ComparisonPage() {
           ) : null
         }
       >
-        <table className="table comparison-table">
+        <div className="table-scroll-top" aria-label="Horizontal scroll control">
+          <button
+            type="button"
+            className="btn"
+            onClick={() => nudgeHorizontalScroll(-320)}
+            disabled={scrollMax <= 0}
+          >
+            ←
+          </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => nudgeHorizontalScroll(320)}
+            disabled={scrollMax <= 0}
+          >
+            →
+          </button>
+          <span className="table-scroll-hint">Drag table left/right</span>
+        </div>
+        <div
+          className={`table-scroll ${scrollMax > 0 ? 'drag-enabled' : ''} ${isDraggingTable ? 'is-dragging' : ''}`}
+          ref={tableScrollRef}
+          onScroll={syncFromTable}
+          onMouseDown={handleTableMouseDown}
+          onMouseMove={handleTableMouseMove}
+          onMouseUp={stopTableDragging}
+          onMouseLeave={stopTableDragging}
+        >
+        <div className="comparison-table-inner" ref={tableInnerRef}>
+        <table className="table comparison-table" style={{ minWidth: `${tableMinWidth}px` }}>
           <thead>
             <tr>
               <th rowSpan={2}>
@@ -635,25 +812,27 @@ export default function ComparisonPage() {
                   Code/Tag{sortIndicator('sku')}
                 </button>
               </th>
-              <th rowSpan={2}>
-                <button className="th-sort-btn" onClick={() => cycleSort('product_name')}>
-                  Product{sortIndicator('product_name')}
-                </button>
-              </th>
-              <th rowSpan={2}>Brand</th>
+              {showProductColumn ? (
+                <th rowSpan={2} className="comparison-col-product">
+                  <button className="th-sort-btn" onClick={() => cycleSort('product_name')}>
+                    Product{sortIndicator('product_name')}
+                  </button>
+                </th>
+              ) : null}
+              {showBrandColumn ? <th rowSpan={2} className="comparison-col-brand">Brand</th> : null}
               <th rowSpan={2}>
                 <button className="th-sort-btn" onClick={() => cycleSort('quantity')}>
                   Qty/UOM{sortIndicator('quantity')}
                 </button>
               </th>
-              {comparisonMode === 'average' ? (
+              {showAverageColumns ? (
                 <th rowSpan={2}>
                   <button className="th-sort-btn" onClick={() => cycleSort('avg_unit_price')}>
                     Avg Unit Price{sortIndicator('avg_unit_price')}
                   </button>
                 </th>
               ) : null}
-              {comparisonMode === 'average' ? <th rowSpan={2}>Avg Extended</th> : null}
+              {showAverageColumns ? <th rowSpan={2}>Avg Extended</th> : null}
               {visibleDealers.map((dealer) => (
                 <th
                   key={`group-${dealer.invite_id}`}
@@ -672,13 +851,17 @@ export default function ComparisonPage() {
                       Unit Price{sortIndicator('dealer_price', dealer.invite_id)}
                     </button>
                   </th>
+                  {showLeadTimeColumn ? <th>Lead Time (Days)</th> : null}
+                  {showDealerNotesColumn ? <th>Notes</th> : null}
                   <th>Extended</th>
-                  <th className={comparisonMode === 'competitive' && showNextBestDeltaColumn ? '' : 'dealer-block-end'}>
-                    <button className="th-sort-btn" onClick={() => cycleSort('dealer_delta', dealer.invite_id)}>
-                      {comparisonMode === 'competitive' ? '% Next Lower' : '% Avg Delta'}{sortIndicator('dealer_delta', dealer.invite_id)}
-                    </button>
-                  </th>
-                  {comparisonMode === 'competitive' && showNextBestDeltaColumn ? (
+                  {showDealerDeltaColumn ? (
+                    <th className={showDealerNextDeltaColumn ? '' : 'dealer-block-end'}>
+                      <button className="th-sort-btn" onClick={() => cycleSort('dealer_delta', dealer.invite_id)}>
+                        {comparisonMode === 'competitive' ? '% Next Lower' : '% Avg Delta'}{sortIndicator('dealer_delta', dealer.invite_id)}
+                      </button>
+                    </th>
+                  ) : null}
+                  {showDealerNextDeltaColumn ? (
                     <th className="dealer-block-end">
                       <button className="th-sort-btn" onClick={() => cycleSort('dealer_next_delta', dealer.invite_id)}>
                         % Next Higher{sortIndicator('dealer_next_delta', dealer.invite_id)}
@@ -702,11 +885,19 @@ export default function ComparisonPage() {
                   />
                 </td>
                 <td>{row.sku || '—'}</td>
-                <td>{row.product_name || '—'}</td>
-                <td>{row.manufacturer || '—'}</td>
+                {showProductColumn ? (
+                  <td className="comparison-col-product" title={row.product_name || ''}>
+                    {row.product_name || '—'}
+                  </td>
+                ) : null}
+                {showBrandColumn ? (
+                  <td className="comparison-col-brand" title={row.manufacturer || ''}>
+                    {row.manufacturer || '—'}
+                  </td>
+                ) : null}
                 <td>{row.quantity || '—'} {row.uom || ''}</td>
-                {comparisonMode === 'average' ? <td className="num">{money(dynamicRowAverage(row))}</td> : null}
-                {comparisonMode === 'average' ? <td className="num">{money(extendedAmount(dynamicRowAverage(row), row.quantity))}</td> : null}
+                {showAverageColumns ? <td className="num">{money(dynamicRowAverage(row))}</td> : null}
+                {showAverageColumns ? <td className="num">{money(extendedAmount(dynamicRowAverage(row), row.quantity))}</td> : null}
                 {visibleDealers.flatMap((dealer) => {
                   const cell = (row.dealers || []).find((d) => d.invite_id === dealer.invite_id)
                   const effectivePrice = effectiveUnitPrice(row, cell)
@@ -718,7 +909,9 @@ export default function ComparisonPage() {
                     : delta(effectivePrice, dynamicRowAverage(row))
                   const nextBestDelta = nextBestDeltaDisplay(rowVisibleDealerPrices(row), effectivePrice)
                   const subPopoverKey = `${row.spec_item_id}-${dealer.invite_id}`
-                  return [
+                  const notePopoverKey = `note-${row.spec_item_id}-${dealer.invite_id}`
+                  const dealerNote = String(cell?.dealer_notes || '').trim()
+                  const cells = [
                     <td
                       key={`${row.spec_item_id}-${dealer.invite_id}-price`}
                       className={`dealer-block-start num ${isBest ? 'best' : ''}`.trim()}
@@ -749,16 +942,52 @@ export default function ComparisonPage() {
                         <span>{money(effectivePrice)}</span>
                       </div>
                     </td>,
+                    showLeadTimeColumn ? (
+                      <td key={`${row.spec_item_id}-${dealer.invite_id}-lead-time`} className="num">
+                        {cell?.lead_time_days ?? '—'}
+                      </td>
+                    ) : null,
+                    showDealerNotesColumn ? (
+                      <td key={`${row.spec_item_id}-${dealer.invite_id}-dealer-notes`} className="dealer-notes-cell">
+                        {dealerNote ? (
+                          <span
+                            className="sub-popover-wrap"
+                            onMouseEnter={() => setActiveNotePopoverKey(notePopoverKey)}
+                            onMouseLeave={() => setActiveNotePopoverKey((prev) => (prev === notePopoverKey ? null : prev))}
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <button
+                              type="button"
+                              className="note-chip"
+                              onClick={() => setActiveNotePopoverKey((prev) => (prev === notePopoverKey ? null : notePopoverKey))}
+                              aria-label="View dealer note"
+                            >
+                              i
+                            </button>
+                            {activeNotePopoverKey === notePopoverKey ? (
+                              <div className="sub-popover dealer-note-popover">
+                                {dealerNote}
+                              </div>
+                            ) : null}
+                          </span>
+                        ) : '—'}
+                      </td>
+                    ) : null,
                     <td key={`${row.spec_item_id}-${dealer.invite_id}-extended`} className="num">
                       {money(extendedAmount(effectivePrice, row.quantity))}
                     </td>,
-                    <td key={`${row.spec_item_id}-${dealer.invite_id}-delta`} className={`${comparisonMode === 'competitive' && showNextBestDeltaColumn ? '' : 'dealer-block-end'} num`.trim()}>
-                      {betterDelta}
-                    </td>,
-                    ...(comparisonMode === 'competitive' && showNextBestDeltaColumn
+                    ...(showDealerDeltaColumn
+                      ? [(
+                        <td key={`${row.spec_item_id}-${dealer.invite_id}-delta`} className={`${showDealerNextDeltaColumn ? '' : 'dealer-block-end'} num`.trim()}>
+                          {betterDelta}
+                        </td>
+                      )]
+                      : []),
+                    ...(showDealerNextDeltaColumn
                       ? [<td key={`${row.spec_item_id}-${dealer.invite_id}-next-delta`} className="dealer-block-end num">{nextBestDelta}</td>]
                       : [])
                   ]
+                  return cells.filter(Boolean)
                 })}
               </tr>
             ))}
@@ -771,9 +1000,9 @@ export default function ComparisonPage() {
           {sortedRows.length > 0 ? (
             <tfoot>
               <tr className="total-row">
-                <td colSpan={5}><strong>Sub-total</strong></td>
-                {comparisonMode === 'average' ? <td className="num"><strong>—</strong></td> : null}
-                {comparisonMode === 'average' ? <td className="num"><strong>{money(avgSubtotal)}</strong></td> : null}
+                <td colSpan={labelColumnsBeforeAverages}><strong>Sub-total</strong></td>
+                {showAverageColumns ? <td className="num"><strong>—</strong></td> : null}
+                {showAverageColumns ? <td className="num"><strong>{money(avgSubtotal)}</strong></td> : null}
                 {visibleDealers.map((dealer) => {
                   const summary = dealerTotalsById[dealer.invite_id]
                   const subtotal = summary?.subtotal || 0
@@ -787,9 +1016,11 @@ export default function ComparisonPage() {
                   return (
                     <Fragment key={`subtotal-${dealer.invite_id}`}>
                       <td className={`dealer-block-start num ${isBest ? 'best' : ''}`.trim()}><strong>—</strong></td>
+                      {showLeadTimeColumn ? <td className="num"><strong>—</strong></td> : null}
+                      {showDealerNotesColumn ? <td><strong>—</strong></td> : null}
                       <td className={`num ${isBest ? 'best' : ''}`.trim()}><strong>{money(subtotal)}</strong></td>
-                      <td className={`${comparisonMode === 'competitive' && showNextBestDeltaColumn ? '' : 'dealer-block-end'} num`.trim()}><strong>{betterDelta}</strong></td>
-                      {comparisonMode === 'competitive' && showNextBestDeltaColumn ? (
+                      {showDealerDeltaColumn ? <td className={`${showDealerNextDeltaColumn ? '' : 'dealer-block-end'} num`.trim()}><strong>{betterDelta}</strong></td> : null}
+                      {showDealerNextDeltaColumn ? (
                         <td className="dealer-block-end num"><strong>{nextBestDelta}</strong></td>
                       ) : null}
                     </Fragment>
@@ -798,9 +1029,9 @@ export default function ComparisonPage() {
               </tr>
               {activeGeneralFields.includes('delivery_amount') ? (
               <tr>
-                <td colSpan={5}><strong>Delivery</strong></td>
-                {comparisonMode === 'average' ? <td className="num"><strong>—</strong></td> : null}
-                {comparisonMode === 'average' ? <td className="num"><strong>{money(avgDelivery)}</strong></td> : null}
+                <td colSpan={labelColumnsBeforeAverages}><strong>Shipping</strong></td>
+                {showAverageColumns ? <td className="num"><strong>—</strong></td> : null}
+                {showAverageColumns ? <td className="num"><strong>{money(avgDelivery)}</strong></td> : null}
                 {visibleDealers.map((dealer) => {
                   const value = dealerTotalsById[dealer.invite_id]?.delivery || 0
                   const isBest = value === bestDealerDelivery
@@ -813,9 +1044,11 @@ export default function ComparisonPage() {
                   return (
                     <Fragment key={`delivery-${dealer.invite_id}`}>
                       <td className={`dealer-block-start num ${isBest ? 'best' : ''}`.trim()}><strong>—</strong></td>
+                      {showLeadTimeColumn ? <td className="num"><strong>—</strong></td> : null}
+                      {showDealerNotesColumn ? <td><strong>—</strong></td> : null}
                       <td className={`num ${isBest ? 'best' : ''}`.trim()}><strong>{money(value)}</strong></td>
-                      <td className={`${comparisonMode === 'competitive' && showNextBestDeltaColumn ? '' : 'dealer-block-end'} num`.trim()}><strong>{betterDelta}</strong></td>
-                      {comparisonMode === 'competitive' && showNextBestDeltaColumn ? (
+                      {showDealerDeltaColumn ? <td className={`${showDealerNextDeltaColumn ? '' : 'dealer-block-end'} num`.trim()}><strong>{betterDelta}</strong></td> : null}
+                      {showDealerNextDeltaColumn ? (
                         <td className="dealer-block-end num"><strong>{nextBestDelta}</strong></td>
                       ) : null}
                     </Fragment>
@@ -825,9 +1058,9 @@ export default function ComparisonPage() {
               ) : null}
               {activeGeneralFields.includes('install_amount') ? (
               <tr>
-                <td colSpan={5}><strong>Install</strong></td>
-                {comparisonMode === 'average' ? <td className="num"><strong>—</strong></td> : null}
-                {comparisonMode === 'average' ? <td className="num"><strong>{money(avgInstall)}</strong></td> : null}
+                <td colSpan={labelColumnsBeforeAverages}><strong>Install</strong></td>
+                {showAverageColumns ? <td className="num"><strong>—</strong></td> : null}
+                {showAverageColumns ? <td className="num"><strong>{money(avgInstall)}</strong></td> : null}
                 {visibleDealers.map((dealer) => {
                   const value = dealerTotalsById[dealer.invite_id]?.install || 0
                   const isBest = value === bestDealerInstall
@@ -840,9 +1073,11 @@ export default function ComparisonPage() {
                   return (
                     <Fragment key={`install-${dealer.invite_id}`}>
                       <td className={`dealer-block-start num ${isBest ? 'best' : ''}`.trim()}><strong>—</strong></td>
+                      {showLeadTimeColumn ? <td className="num"><strong>—</strong></td> : null}
+                      {showDealerNotesColumn ? <td><strong>—</strong></td> : null}
                       <td className={`num ${isBest ? 'best' : ''}`.trim()}><strong>{money(value)}</strong></td>
-                      <td className={`${comparisonMode === 'competitive' && showNextBestDeltaColumn ? '' : 'dealer-block-end'} num`.trim()}><strong>{betterDelta}</strong></td>
-                      {comparisonMode === 'competitive' && showNextBestDeltaColumn ? (
+                      {showDealerDeltaColumn ? <td className={`${showDealerNextDeltaColumn ? '' : 'dealer-block-end'} num`.trim()}><strong>{betterDelta}</strong></td> : null}
+                      {showDealerNextDeltaColumn ? (
                         <td className="dealer-block-end num"><strong>{nextBestDelta}</strong></td>
                       ) : null}
                     </Fragment>
@@ -852,9 +1087,9 @@ export default function ComparisonPage() {
               ) : null}
               {activeGeneralFields.includes('escalation_amount') ? (
               <tr>
-                <td colSpan={5}><strong>Escalation</strong></td>
-                {comparisonMode === 'average' ? <td className="num"><strong>—</strong></td> : null}
-                {comparisonMode === 'average' ? <td className="num"><strong>{money(avgEscalation)}</strong></td> : null}
+                <td colSpan={labelColumnsBeforeAverages}><strong>Escalation</strong></td>
+                {showAverageColumns ? <td className="num"><strong>—</strong></td> : null}
+                {showAverageColumns ? <td className="num"><strong>{money(avgEscalation)}</strong></td> : null}
                 {visibleDealers.map((dealer) => {
                   const value = dealerTotalsById[dealer.invite_id]?.escalation || 0
                   const isBest = value === bestDealerEscalation
@@ -867,9 +1102,11 @@ export default function ComparisonPage() {
                   return (
                     <Fragment key={`escalation-${dealer.invite_id}`}>
                       <td className={`dealer-block-start num ${isBest ? 'best' : ''}`.trim()}><strong>—</strong></td>
+                      {showLeadTimeColumn ? <td className="num"><strong>—</strong></td> : null}
+                      {showDealerNotesColumn ? <td><strong>—</strong></td> : null}
                       <td className={`num ${isBest ? 'best' : ''}`.trim()}><strong>{money(value)}</strong></td>
-                      <td className={`${comparisonMode === 'competitive' && showNextBestDeltaColumn ? '' : 'dealer-block-end'} num`.trim()}><strong>{betterDelta}</strong></td>
-                      {comparisonMode === 'competitive' && showNextBestDeltaColumn ? (
+                      {showDealerDeltaColumn ? <td className={`${showDealerNextDeltaColumn ? '' : 'dealer-block-end'} num`.trim()}><strong>{betterDelta}</strong></td> : null}
+                      {showDealerNextDeltaColumn ? (
                         <td className="dealer-block-end num"><strong>{nextBestDelta}</strong></td>
                       ) : null}
                     </Fragment>
@@ -879,9 +1116,9 @@ export default function ComparisonPage() {
               ) : null}
               {activeGeneralFields.includes('contingency_amount') ? (
               <tr>
-                <td colSpan={5}><strong>Contingency</strong></td>
-                {comparisonMode === 'average' ? <td className="num"><strong>—</strong></td> : null}
-                {comparisonMode === 'average' ? <td className="num"><strong>{money(avgContingency)}</strong></td> : null}
+                <td colSpan={labelColumnsBeforeAverages}><strong>Contingency</strong></td>
+                {showAverageColumns ? <td className="num"><strong>—</strong></td> : null}
+                {showAverageColumns ? <td className="num"><strong>{money(avgContingency)}</strong></td> : null}
                 {visibleDealers.map((dealer) => {
                   const value = dealerTotalsById[dealer.invite_id]?.contingency || 0
                   const isBest = value === bestDealerContingency
@@ -894,9 +1131,11 @@ export default function ComparisonPage() {
                   return (
                     <Fragment key={`contingency-${dealer.invite_id}`}>
                       <td className={`dealer-block-start num ${isBest ? 'best' : ''}`.trim()}><strong>—</strong></td>
+                      {showLeadTimeColumn ? <td className="num"><strong>—</strong></td> : null}
+                      {showDealerNotesColumn ? <td><strong>—</strong></td> : null}
                       <td className={`num ${isBest ? 'best' : ''}`.trim()}><strong>{money(value)}</strong></td>
-                      <td className={`${comparisonMode === 'competitive' && showNextBestDeltaColumn ? '' : 'dealer-block-end'} num`.trim()}><strong>{betterDelta}</strong></td>
-                      {comparisonMode === 'competitive' && showNextBestDeltaColumn ? (
+                      {showDealerDeltaColumn ? <td className={`${showDealerNextDeltaColumn ? '' : 'dealer-block-end'} num`.trim()}><strong>{betterDelta}</strong></td> : null}
+                      {showDealerNextDeltaColumn ? (
                         <td className="dealer-block-end num"><strong>{nextBestDelta}</strong></td>
                       ) : null}
                     </Fragment>
@@ -906,9 +1145,9 @@ export default function ComparisonPage() {
               ) : null}
               {activeGeneralFields.includes('sales_tax_amount') ? (
               <tr>
-                <td colSpan={5}><strong>Sales Tax</strong></td>
-                {comparisonMode === 'average' ? <td className="num"><strong>—</strong></td> : null}
-                {comparisonMode === 'average' ? <td className="num"><strong>{money(avgSalesTax)}</strong></td> : null}
+                <td colSpan={labelColumnsBeforeAverages}><strong>Sales Tax</strong></td>
+                {showAverageColumns ? <td className="num"><strong>—</strong></td> : null}
+                {showAverageColumns ? <td className="num"><strong>{money(avgSalesTax)}</strong></td> : null}
                 {visibleDealers.map((dealer) => {
                   const value = dealerTotalsById[dealer.invite_id]?.salesTax || 0
                   const isBest = value === bestDealerSalesTax
@@ -921,9 +1160,11 @@ export default function ComparisonPage() {
                   return (
                     <Fragment key={`sales-tax-${dealer.invite_id}`}>
                       <td className={`dealer-block-start num ${isBest ? 'best' : ''}`.trim()}><strong>—</strong></td>
+                      {showLeadTimeColumn ? <td className="num"><strong>—</strong></td> : null}
+                      {showDealerNotesColumn ? <td><strong>—</strong></td> : null}
                       <td className={`num ${isBest ? 'best' : ''}`.trim()}><strong>{money(value)}</strong></td>
-                      <td className={`${comparisonMode === 'competitive' && showNextBestDeltaColumn ? '' : 'dealer-block-end'} num`.trim()}><strong>{betterDelta}</strong></td>
-                      {comparisonMode === 'competitive' && showNextBestDeltaColumn ? (
+                      {showDealerDeltaColumn ? <td className={`${showDealerNextDeltaColumn ? '' : 'dealer-block-end'} num`.trim()}><strong>{betterDelta}</strong></td> : null}
+                      {showDealerNextDeltaColumn ? (
                         <td className="dealer-block-end num"><strong>{nextBestDelta}</strong></td>
                       ) : null}
                     </Fragment>
@@ -932,9 +1173,9 @@ export default function ComparisonPage() {
               </tr>
               ) : null}
               <tr className="total-row">
-                <td colSpan={5}><strong>Total Bid Amount</strong></td>
-                {comparisonMode === 'average' ? <td className="num"><strong>—</strong></td> : null}
-                {comparisonMode === 'average' ? <td className="num"><strong>{money(avgTotal)}</strong></td> : null}
+                <td colSpan={labelColumnsBeforeAverages}><strong>Total Bid Amount</strong></td>
+                {showAverageColumns ? <td className="num"><strong>—</strong></td> : null}
+                {showAverageColumns ? <td className="num"><strong>{money(avgTotal)}</strong></td> : null}
                 {visibleDealers.map((dealer) => {
                   const total = dealerTotalsById[dealer.invite_id]?.total || 0
                   const isBest = total === bestDealerTotal
@@ -947,9 +1188,11 @@ export default function ComparisonPage() {
                   return (
                     <Fragment key={`total-${dealer.invite_id}`}>
                       <td className={`dealer-block-start num ${isBest ? 'best' : ''}`.trim()}><strong>—</strong></td>
+                      {showLeadTimeColumn ? <td className="num"><strong>—</strong></td> : null}
+                      {showDealerNotesColumn ? <td><strong>—</strong></td> : null}
                       <td className={`num ${isBest ? 'best' : ''}`.trim()}><strong>{money(total)}</strong></td>
-                      <td className={`${comparisonMode === 'competitive' && showNextBestDeltaColumn ? '' : 'dealer-block-end'} num`.trim()}><strong>{betterDelta}</strong></td>
-                      {comparisonMode === 'competitive' && showNextBestDeltaColumn ? (
+                      {showDealerDeltaColumn ? <td className={`${showDealerNextDeltaColumn ? '' : 'dealer-block-end'} num`.trim()}><strong>{betterDelta}</strong></td> : null}
+                      {showDealerNextDeltaColumn ? (
                         <td className="dealer-block-end num"><strong>{nextBestDelta}</strong></td>
                       ) : null}
                     </Fragment>
@@ -959,6 +1202,8 @@ export default function ComparisonPage() {
             </tfoot>
           ) : null}
         </table>
+        </div>
+        </div>
 
         {(visibleDealers || []).length > 0 ? (
           <p className="text-muted">

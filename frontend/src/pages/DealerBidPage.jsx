@@ -116,6 +116,52 @@ function netUnitPrice(unitListPrice, discountPercent, tariffPercent) {
   return discounted * (1 + (tariff / 100))
 }
 
+function isValidLeadTimeValue(value) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return true
+  if (/^\d+$/.test(raw)) return true
+
+  const range = raw.match(/^(\d+)\s*-\s*(\d+)$/)
+  if (!range) return false
+  return Number(range[1]) <= Number(range[2])
+}
+
+function isNonNegativeNumberOrBlank(value) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return true
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) && parsed >= 0
+}
+
+function isPercentOrBlank(value) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return true
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 100
+}
+
+function rowFieldError(row, field) {
+  if (field === 'unit_price') {
+    const raw = String(row?.unit_price ?? '').trim()
+    if (row?.is_substitution && !raw) return 'Substitution requires Unit List Price'
+    return isNonNegativeNumberOrBlank(raw) ? null : 'Unit List Price must be a non-negative number'
+  }
+
+  if (field === 'discount_percent') {
+    return isPercentOrBlank(row?.discount_percent) ? null : '% Discount must be between 0 and 100'
+  }
+
+  if (field === 'tariff_percent') {
+    return isPercentOrBlank(row?.tariff_percent) ? null : '% Tariff must be between 0 and 100'
+  }
+
+  if (field === 'lead_time_days') {
+    return isValidLeadTimeValue(row?.lead_time_days) ? null : 'Lead time must be a whole number or range like 30-45'
+  }
+
+  return null
+}
+
 export default function DealerBidPage() {
   const { token } = useParams()
 
@@ -217,6 +263,7 @@ export default function DealerBidPage() {
   const activityLabel = bidState === 'submitted' ? 'SUBMITTED' : 'LAST SAVED'
   const activityValue = bidState === 'submitted' ? formatTimestamp(submittedAt) : formatTimestamp(lastSavedAt)
   const activityIcon = bidState === 'submitted' ? submittedIcon : lastSavedIcon
+  const statusIsError = /failed|error|must|cannot|invalid|not a number|greater than|less than|required|blank/i.test(statusMessage || '')
 
   const downloadCsvTemplate = () => {
     const headers = [
@@ -465,9 +512,28 @@ export default function DealerBidPage() {
   }
 
   const saveDraftRequest = async () => {
-    const invalidSubstitution = rows.find((row) => row.is_substitution && numberOrNull(row.unit_price) == null)
-    if (invalidSubstitution) {
-      throw new Error('Each substitution row must include a Unit List Price before saving.')
+    const fieldOrder = ['unit_price', 'discount_percent', 'tariff_percent', 'lead_time_days']
+    for (const row of rows) {
+      for (const field of fieldOrder) {
+        const error = rowFieldError(row, field)
+        if (error) throw new Error(error)
+      }
+    }
+
+    if (!isNonNegativeNumberOrBlank(deliveryAmount)) {
+      throw new Error('Shipping must be a non-negative number.')
+    }
+    if (!isNonNegativeNumberOrBlank(installAmount)) {
+      throw new Error('Install must be a non-negative number.')
+    }
+    if (!isNonNegativeNumberOrBlank(escalationAmount)) {
+      throw new Error('Escalation must be a non-negative number.')
+    }
+    if (!isNonNegativeNumberOrBlank(contingencyAmount)) {
+      throw new Error('Contingency must be a non-negative number.')
+    }
+    if (!isNonNegativeNumberOrBlank(salesTaxAmount)) {
+      throw new Error('Sales Tax must be a non-negative number.')
     }
 
     const result = await saveDealerBid(token, buildLineItemPayload(), {
@@ -614,7 +680,7 @@ export default function DealerBidPage() {
           </div>
         }
       >
-        <p className="text-muted vendor-status-inline">{statusMessage}</p>
+        <p className={`vendor-status-inline ${statusIsError ? 'error' : 'text-muted'}`}>{statusMessage}</p>
         <table className="table dense vendor-line-table">
           <thead>
             <tr>
@@ -628,7 +694,7 @@ export default function DealerBidPage() {
               <th>% Tariff</th>
               <th>Unit Net Price</th>
               <th>Lead Time (days)</th>
-              <th>Dealer Notes</th>
+              <th>Notes</th>
               <th>Extended Price</th>
             </tr>
           </thead>
@@ -681,6 +747,7 @@ export default function DealerBidPage() {
                   <input
                     value={row.unit_price ?? ''}
                     onChange={(event) => updateRow(index, 'unit_price', event.target.value)}
+                    className={rowFieldError(row, 'unit_price') ? 'input-error' : ''}
                     disabled={bidState === 'submitted'}
                   />
                 </td>
@@ -688,6 +755,7 @@ export default function DealerBidPage() {
                   <input
                     value={row.discount_percent ?? ''}
                     onChange={(event) => updateRow(index, 'discount_percent', event.target.value)}
+                    className={rowFieldError(row, 'discount_percent') ? 'input-error' : ''}
                     disabled={bidState === 'submitted'}
                   />
                 </td>
@@ -695,6 +763,7 @@ export default function DealerBidPage() {
                   <input
                     value={row.tariff_percent ?? ''}
                     onChange={(event) => updateRow(index, 'tariff_percent', event.target.value)}
+                    className={rowFieldError(row, 'tariff_percent') ? 'input-error' : ''}
                     disabled={bidState === 'submitted'}
                   />
                 </td>
@@ -703,6 +772,8 @@ export default function DealerBidPage() {
                   <input
                     value={row.lead_time_days ?? ''}
                     onChange={(event) => updateRow(index, 'lead_time_days', event.target.value)}
+                    placeholder="30 or 30-45"
+                    className={rowFieldError(row, 'lead_time_days') ? 'input-error' : ''}
                     disabled={bidState === 'submitted'}
                   />
                 </td>
@@ -730,11 +801,12 @@ export default function DealerBidPage() {
               </tr>
               {activeGeneralFields.includes('delivery_amount') ? (
               <tr>
-                <td colSpan={11} style={{ textAlign: 'right' }}>Delivery</td>
+                <td colSpan={11} style={{ textAlign: 'right' }}>Shipping</td>
                 <td>
                   <input
                     value={deliveryAmount}
                     onChange={(event) => setDeliveryAmount(event.target.value)}
+                    className={!isNonNegativeNumberOrBlank(deliveryAmount) ? 'input-error' : ''}
                     disabled={bidState === 'submitted'}
                   />
                 </td>
@@ -747,6 +819,7 @@ export default function DealerBidPage() {
                   <input
                     value={installAmount}
                     onChange={(event) => setInstallAmount(event.target.value)}
+                    className={!isNonNegativeNumberOrBlank(installAmount) ? 'input-error' : ''}
                     disabled={bidState === 'submitted'}
                   />
                 </td>
@@ -759,6 +832,7 @@ export default function DealerBidPage() {
                   <input
                     value={escalationAmount}
                     onChange={(event) => setEscalationAmount(event.target.value)}
+                    className={!isNonNegativeNumberOrBlank(escalationAmount) ? 'input-error' : ''}
                     disabled={bidState === 'submitted'}
                   />
                 </td>
@@ -771,6 +845,7 @@ export default function DealerBidPage() {
                   <input
                     value={contingencyAmount}
                     onChange={(event) => setContingencyAmount(event.target.value)}
+                    className={!isNonNegativeNumberOrBlank(contingencyAmount) ? 'input-error' : ''}
                     disabled={bidState === 'submitted'}
                   />
                 </td>
@@ -783,6 +858,7 @@ export default function DealerBidPage() {
                   <input
                     value={salesTaxAmount}
                     onChange={(event) => setSalesTaxAmount(event.target.value)}
+                    className={!isNonNegativeNumberOrBlank(salesTaxAmount) ? 'input-error' : ''}
                     disabled={bidState === 'submitted'}
                   />
                 </td>
