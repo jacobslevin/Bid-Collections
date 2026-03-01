@@ -1,6 +1,14 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import SectionCard from '../components/SectionCard'
-import { comparisonExportUrl, fetchBidPackages, fetchComparison } from '../lib/api'
+import {
+  awardBidPackage,
+  clearBidPackageAward,
+  changeBidPackageAward,
+  comparisonExportUrl,
+  fetchBidPackages,
+  fetchComparison
+} from '../lib/api'
 
 const usdFormatter = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 2,
@@ -53,9 +61,106 @@ function companyName(dealerName) {
   return company || raw || 'Dealer'
 }
 
+function cellModeKey(specItemId, inviteId) {
+  return `${specItemId}:${inviteId}`
+}
+
+const DEFAULT_COMPARISON_VIEW_STATE = {
+  responderSort: 'lowest_bid',
+  comparisonMode: 'none',
+  showProductColumn: true,
+  showBrandColumn: true,
+  showLeadTimeColumn: false,
+  showDealerNotesColumn: false
+}
+
+function comparisonStateStorageKey(bidPackageId) {
+  return `bid_collections.comparison.state.${bidPackageId}`
+}
+
+function loadStoredComparisonState(bidPackageId) {
+  if (!bidPackageId) {
+    return {
+      dealerPriceMode: {},
+      cellPriceMode: {},
+      excludedSpecItemIds: [],
+      ...DEFAULT_COMPARISON_VIEW_STATE
+    }
+  }
+  try {
+    const raw = window.localStorage.getItem(comparisonStateStorageKey(bidPackageId))
+    if (!raw) {
+      return {
+        dealerPriceMode: {},
+        cellPriceMode: {},
+        excludedSpecItemIds: [],
+        ...DEFAULT_COMPARISON_VIEW_STATE
+      }
+    }
+    const parsed = JSON.parse(raw)
+    return {
+      dealerPriceMode: parsed?.dealerPriceMode && typeof parsed.dealerPriceMode === 'object' ? parsed.dealerPriceMode : {},
+      cellPriceMode: parsed?.cellPriceMode && typeof parsed.cellPriceMode === 'object' ? parsed.cellPriceMode : {},
+      excludedSpecItemIds: Array.isArray(parsed?.excludedSpecItemIds) ? parsed.excludedSpecItemIds.map((id) => String(id)) : [],
+      responderSort: parsed?.responderSort || DEFAULT_COMPARISON_VIEW_STATE.responderSort,
+      comparisonMode: parsed?.comparisonMode || DEFAULT_COMPARISON_VIEW_STATE.comparisonMode,
+      showProductColumn: typeof parsed?.showProductColumn === 'boolean' ? parsed.showProductColumn : DEFAULT_COMPARISON_VIEW_STATE.showProductColumn,
+      showBrandColumn: typeof parsed?.showBrandColumn === 'boolean' ? parsed.showBrandColumn : DEFAULT_COMPARISON_VIEW_STATE.showBrandColumn,
+      showLeadTimeColumn: typeof parsed?.showLeadTimeColumn === 'boolean' ? parsed.showLeadTimeColumn : DEFAULT_COMPARISON_VIEW_STATE.showLeadTimeColumn,
+      showDealerNotesColumn: typeof parsed?.showDealerNotesColumn === 'boolean' ? parsed.showDealerNotesColumn : DEFAULT_COMPARISON_VIEW_STATE.showDealerNotesColumn
+    }
+  } catch (_error) {
+    return {
+      dealerPriceMode: {},
+      cellPriceMode: {},
+      excludedSpecItemIds: [],
+      ...DEFAULT_COMPARISON_VIEW_STATE
+    }
+  }
+}
+
+function storeComparisonState(bidPackageId, state) {
+  if (!bidPackageId) return
+  try {
+    window.localStorage.setItem(comparisonStateStorageKey(bidPackageId), JSON.stringify({
+      dealerPriceMode: state?.dealerPriceMode || {},
+      cellPriceMode: state?.cellPriceMode || {},
+      excludedSpecItemIds: Array.isArray(state?.excludedSpecItemIds) ? state.excludedSpecItemIds : [],
+      responderSort: state?.responderSort || DEFAULT_COMPARISON_VIEW_STATE.responderSort,
+      comparisonMode: state?.comparisonMode || DEFAULT_COMPARISON_VIEW_STATE.comparisonMode,
+      showProductColumn: typeof state?.showProductColumn === 'boolean' ? state.showProductColumn : DEFAULT_COMPARISON_VIEW_STATE.showProductColumn,
+      showBrandColumn: typeof state?.showBrandColumn === 'boolean' ? state.showBrandColumn : DEFAULT_COMPARISON_VIEW_STATE.showBrandColumn,
+      showLeadTimeColumn: typeof state?.showLeadTimeColumn === 'boolean' ? state.showLeadTimeColumn : DEFAULT_COMPARISON_VIEW_STATE.showLeadTimeColumn,
+      showDealerNotesColumn: typeof state?.showDealerNotesColumn === 'boolean' ? state.showDealerNotesColumn : DEFAULT_COMPARISON_VIEW_STATE.showDealerNotesColumn
+    }))
+  } catch (_error) {
+    // ignore storage failures
+  }
+}
+
+function clearStoredComparisonState(bidPackageId) {
+  if (!bidPackageId) return
+  try {
+    window.localStorage.removeItem(comparisonStateStorageKey(bidPackageId))
+  } catch (_error) {
+    // ignore storage failures
+  }
+}
+
+function selectionStatusForDealer(dealer, awardedBidId) {
+  if (dealer?.selection_status) return dealer.selection_status
+  if (awardedBidId && dealer?.bid_id === awardedBidId) return 'awarded'
+  if (awardedBidId) return 'not_selected'
+  return 'pending'
+}
+
 export default function ComparisonPage() {
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const forcedBidPackageId = searchParams.get('bid_package_id') || ''
+  const launchedFromDashboard = Boolean(forcedBidPackageId)
   const [bidPackages, setBidPackages] = useState([])
-  const [selectedBidPackageId, setSelectedBidPackageId] = useState('')
+  const [selectedBidPackageId, setSelectedBidPackageId] = useState(forcedBidPackageId)
   const [loadedBidPackageId, setLoadedBidPackageId] = useState('')
   const [data, setData] = useState({ dealers: [], rows: [] })
   const [visibleDealerIds, setVisibleDealerIds] = useState([])
@@ -69,6 +174,7 @@ export default function ComparisonPage() {
   const [activeNotePopoverKey, setActiveNotePopoverKey] = useState(null)
   const [rowSort, setRowSort] = useState({ key: 'sku', direction: 'asc', inviteId: null })
   const [dealerPriceMode, setDealerPriceMode] = useState({})
+  const [cellPriceMode, setCellPriceMode] = useState({})
   const [excludedRowIds, setExcludedRowIds] = useState([])
   const [activeGeneralFields, setActiveGeneralFields] = useState([
     'delivery_amount',
@@ -80,11 +186,88 @@ export default function ComparisonPage() {
   const [statusMessage, setStatusMessage] = useState('')
   const [loading, setLoading] = useState(false)
   const [loadingPackages, setLoadingPackages] = useState(false)
+  const [awardedBidId, setAwardedBidId] = useState(null)
+  const [awardedAt, setAwardedAt] = useState(null)
+  const [awardModal, setAwardModal] = useState(null)
+  const [awardSaving, setAwardSaving] = useState(false)
   const tableScrollRef = useRef(null)
   const tableInnerRef = useRef(null)
   const [scrollMax, setScrollMax] = useState(0)
   const [isDraggingTable, setIsDraggingTable] = useState(false)
   const dragStateRef = useRef({ active: false, startX: 0, startLeft: 0 })
+  const dealerPriceModeRef = useRef(dealerPriceMode)
+  const cellPriceModeRef = useRef(cellPriceMode)
+  const excludedRowIdsRef = useRef(excludedRowIds)
+  const responderSortRef = useRef(responderSort)
+  const comparisonModeRef = useRef(comparisonMode)
+  const showProductColumnRef = useRef(showProductColumn)
+  const showBrandColumnRef = useRef(showBrandColumn)
+  const showLeadTimeColumnRef = useRef(showLeadTimeColumn)
+  const showDealerNotesColumnRef = useRef(showDealerNotesColumn)
+
+  useEffect(() => {
+    dealerPriceModeRef.current = dealerPriceMode
+  }, [dealerPriceMode])
+
+  useEffect(() => {
+    cellPriceModeRef.current = cellPriceMode
+  }, [cellPriceMode])
+
+  useEffect(() => {
+    excludedRowIdsRef.current = excludedRowIds
+  }, [excludedRowIds])
+
+  useEffect(() => {
+    responderSortRef.current = responderSort
+  }, [responderSort])
+
+  useEffect(() => {
+    comparisonModeRef.current = comparisonMode
+  }, [comparisonMode])
+
+  useEffect(() => {
+    showProductColumnRef.current = showProductColumn
+  }, [showProductColumn])
+
+  useEffect(() => {
+    showBrandColumnRef.current = showBrandColumn
+  }, [showBrandColumn])
+
+  useEffect(() => {
+    showLeadTimeColumnRef.current = showLeadTimeColumn
+  }, [showLeadTimeColumn])
+
+  useEffect(() => {
+    showDealerNotesColumnRef.current = showDealerNotesColumn
+  }, [showDealerNotesColumn])
+
+  const normalizeExcludedIds = (ids) => {
+    const raw = Array.isArray(ids) ? ids : (ids == null ? [] : [ids])
+    const normalized = raw
+      .flatMap((id) => String(id).split(','))
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0)
+    return Array.from(new Set(normalized))
+  }
+
+  const applyExcludedRowIds = (nextIds) => {
+    setExcludedRowIds((prev) => {
+      const resolved = typeof nextIds === 'function' ? nextIds(prev) : nextIds
+      const normalized = normalizeExcludedIds(resolved)
+      excludedRowIdsRef.current = normalized
+      return normalized
+    })
+  }
+
+  const addExcludedRowId = (id) => {
+    const key = String(id)
+    applyExcludedRowIds((prev) => [...prev, key])
+  }
+
+  const removeExcludedRowId = (id) => {
+    const key = String(id)
+    applyExcludedRowIds((prev) => prev.filter((existing) => String(existing) !== key))
+  }
 
   useEffect(() => {
     const loadBidPackages = async () => {
@@ -106,15 +289,34 @@ export default function ComparisonPage() {
     loadBidPackages()
   }, [])
 
-  const loadComparison = async () => {
-    if (!selectedBidPackageId) return
+  const loadComparisonForBidPackage = async (
+    bidPackageId,
+    {
+      dealerPriceMode: requestedDealerPriceMode = {},
+      cellPriceMode: requestedCellPriceMode = {},
+      excludedSpecItemIds: requestedExcludedSpecItemIds = [],
+      responderSort: requestedResponderSort = DEFAULT_COMPARISON_VIEW_STATE.responderSort,
+      comparisonMode: requestedComparisonMode = DEFAULT_COMPARISON_VIEW_STATE.comparisonMode,
+      showProductColumn: requestedShowProductColumn = DEFAULT_COMPARISON_VIEW_STATE.showProductColumn,
+      showBrandColumn: requestedShowBrandColumn = DEFAULT_COMPARISON_VIEW_STATE.showBrandColumn,
+      showLeadTimeColumn: requestedShowLeadTimeColumn = DEFAULT_COMPARISON_VIEW_STATE.showLeadTimeColumn,
+      showDealerNotesColumn: requestedShowDealerNotesColumn = DEFAULT_COMPARISON_VIEW_STATE.showDealerNotesColumn
+    } = {}
+  ) => {
+    if (!bidPackageId) return
 
     setLoading(true)
     setStatusMessage('Loading comparison...')
 
     try {
-      const payload = await fetchComparison(selectedBidPackageId)
+      const payload = await fetchComparison(bidPackageId, {
+        dealerPriceMode: requestedDealerPriceMode,
+        cellPriceMode: requestedCellPriceMode
+      })
       setData({ dealers: payload.dealers || [], rows: payload.rows || [] })
+      setAwardedBidId(payload.awarded_bid_id ?? null)
+      setAwardedAt(payload.awarded_at || null)
+      setAwardModal(null)
       setActiveGeneralFields(payload.active_general_fields || [
         'delivery_amount',
         'install_amount',
@@ -123,26 +325,90 @@ export default function ComparisonPage() {
         'sales_tax_amount'
       ])
       setVisibleDealerIds((payload.dealers || []).map((dealer) => dealer.invite_id))
-      setExcludedRowIds([])
-      setDealerPriceMode(
-        (payload.dealers || []).reduce((acc, dealer) => {
-          acc[dealer.invite_id] = 'bod'
-          return acc
-        }, {})
-      )
-      setLoadedBidPackageId(String(selectedBidPackageId))
+      const nextExcluded = Array(requestedExcludedSpecItemIds || []).map((id) => String(id))
+      setExcludedRowIds(nextExcluded)
+      setDealerPriceMode((payload.dealers || []).reduce((acc, dealer) => {
+        const requestedMode = requestedDealerPriceMode?.[dealer.invite_id] || requestedDealerPriceMode?.[String(dealer.invite_id)]
+        acc[dealer.invite_id] = requestedMode === 'alt' ? 'alt' : 'bod'
+        return acc
+      }, {}))
+      setCellPriceMode(Object.fromEntries(
+        Object.entries(requestedCellPriceMode || {}).filter(([, mode]) => mode === 'alt' || mode === 'bod')
+      ))
+      setResponderSort(requestedResponderSort || DEFAULT_COMPARISON_VIEW_STATE.responderSort)
+      setComparisonMode(requestedComparisonMode || DEFAULT_COMPARISON_VIEW_STATE.comparisonMode)
+      setShowProductColumn(typeof requestedShowProductColumn === 'boolean' ? requestedShowProductColumn : DEFAULT_COMPARISON_VIEW_STATE.showProductColumn)
+      setShowBrandColumn(typeof requestedShowBrandColumn === 'boolean' ? requestedShowBrandColumn : DEFAULT_COMPARISON_VIEW_STATE.showBrandColumn)
+      setShowLeadTimeColumn(typeof requestedShowLeadTimeColumn === 'boolean' ? requestedShowLeadTimeColumn : DEFAULT_COMPARISON_VIEW_STATE.showLeadTimeColumn)
+      setShowDealerNotesColumn(typeof requestedShowDealerNotesColumn === 'boolean' ? requestedShowDealerNotesColumn : DEFAULT_COMPARISON_VIEW_STATE.showDealerNotesColumn)
+      setLoadedBidPackageId(String(bidPackageId))
       setStatusMessage('')
     } catch (error) {
       setData({ dealers: [], rows: [] })
+      setAwardedBidId(null)
+      setAwardedAt(null)
+      setAwardModal(null)
       setStatusMessage(error.message)
     } finally {
       setLoading(false)
     }
   }
 
+  useEffect(() => {
+    if (!forcedBidPackageId) return
+    setSelectedBidPackageId(String(forcedBidPackageId))
+    const storedState = loadStoredComparisonState(String(forcedBidPackageId))
+    loadComparisonForBidPackage(String(forcedBidPackageId), storedState)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [forcedBidPackageId])
+
+  const loadComparison = async () => {
+    if (!selectedBidPackageId) return
+    const hasInMemoryState = (
+      Object.keys(dealerPriceMode).length > 0 ||
+      Object.keys(cellPriceMode).length > 0 ||
+      excludedRowIds.length > 0 ||
+      responderSort !== DEFAULT_COMPARISON_VIEW_STATE.responderSort ||
+      comparisonMode !== DEFAULT_COMPARISON_VIEW_STATE.comparisonMode ||
+      showProductColumn !== DEFAULT_COMPARISON_VIEW_STATE.showProductColumn ||
+      showBrandColumn !== DEFAULT_COMPARISON_VIEW_STATE.showBrandColumn ||
+      showLeadTimeColumn !== DEFAULT_COMPARISON_VIEW_STATE.showLeadTimeColumn ||
+      showDealerNotesColumn !== DEFAULT_COMPARISON_VIEW_STATE.showDealerNotesColumn
+    )
+    const state = hasInMemoryState
+      ? {
+          dealerPriceMode,
+          cellPriceMode,
+          excludedSpecItemIds: excludedRowIds,
+          responderSort,
+          comparisonMode,
+          showProductColumn,
+          showBrandColumn,
+          showLeadTimeColumn,
+          showDealerNotesColumn
+        }
+      : loadStoredComparisonState(String(selectedBidPackageId))
+    await loadComparisonForBidPackage(selectedBidPackageId, state)
+  }
+
+  const resetComparisonView = async () => {
+    const bidPackageId = loadedBidPackageId || selectedBidPackageId
+    if (!bidPackageId) return
+    clearStoredComparisonState(String(bidPackageId))
+    await loadComparisonForBidPackage(String(bidPackageId), {
+      dealerPriceMode: {},
+      cellPriceMode: {},
+      excludedSpecItemIds: [],
+      ...DEFAULT_COMPARISON_VIEW_STATE
+    })
+  }
+
   const effectiveChoice = (row, cell) => {
     if (!cell) return null
     if (cell.has_bod_price && cell.has_alt_price) {
+      const modeKey = cellModeKey(row.spec_item_id, cell.invite_id)
+      const cellMode = cellPriceMode[modeKey]
+      if (cellMode === 'alt' || cellMode === 'bod') return cellMode
       const preferred = dealerPriceMode[cell.invite_id] || 'bod'
       return preferred === 'alt' ? 'alt' : 'bod'
     }
@@ -176,7 +442,11 @@ export default function ComparisonPage() {
     return Math.min(...prices)
   }
 
-  const rowIncluded = (row) => !excludedRowIds.includes(row.spec_item_id)
+  const excludedRowIdSet = useMemo(
+    () => new Set(normalizeExcludedIds(excludedRowIds)),
+    [excludedRowIds]
+  )
+  const rowIncluded = (row) => !excludedRowIdSet.has(String(row.spec_item_id))
   const activeRows = (data.rows || []).filter((row) => rowIncluded(row))
 
   const avgSubtotal = activeRows.reduce((sum, row) => {
@@ -217,43 +487,70 @@ export default function ComparisonPage() {
     return acc
   }, {})
 
-  const dealerQuoteCountsById = (data.dealers || []).reduce((acc, dealer) => {
-    const summary = (data.rows || []).reduce((memo, row) => {
-      const cell = (row.dealers || []).find((d) => d.invite_id === dealer.invite_id)
-      const quotedBod = Boolean(cell?.has_bod_price)
-      const quotedAlt = Boolean(cell?.has_alt_price)
-      if (quotedBod && !quotedAlt) memo.bodOnlyCount += 1
-      if (!quotedBod && quotedAlt) memo.altOnlyCount += 1
-      if (quotedBod && quotedAlt) memo.mixedLineCount += 1
-      return memo
-    }, { altOnlyCount: 0, mixedLineCount: 0, bodOnlyCount: 0 })
-
-    acc[dealer.invite_id] = summary
-    return acc
-  }, {})
-
   useEffect(() => {
-    const knownRowIds = new Set((data.rows || []).map((row) => row.spec_item_id))
-    setExcludedRowIds((prev) => prev.filter((id) => knownRowIds.has(id)))
+    const validKeys = new Set(
+      (data.rows || []).flatMap((row) =>
+        (row.dealers || [])
+          .filter((cell) => cell?.has_bod_price && cell?.has_alt_price)
+          .map((cell) => cellModeKey(row.spec_item_id, cell.invite_id))
+      )
+    )
+    setCellPriceMode((prev) => Object.fromEntries(
+      Object.entries(prev).filter(([key]) => validKeys.has(key))
+    ))
   }, [data.rows])
 
+  useEffect(() => {
+    const knownIds = new Set((data.rows || []).map((row) => String(row.spec_item_id)))
+    if (knownIds.size === 0) return
+    applyExcludedRowIds((current) => current.filter((id) => knownIds.has(String(id))))
+  }, [data.rows])
+
+  useEffect(() => {
+    if (!loadedBidPackageId) return
+    storeComparisonState(String(loadedBidPackageId), {
+      dealerPriceMode,
+      cellPriceMode,
+      excludedSpecItemIds: excludedRowIds,
+      responderSort,
+      comparisonMode,
+      showProductColumn,
+      showBrandColumn,
+      showLeadTimeColumn,
+      showDealerNotesColumn
+    })
+  }, [
+    loadedBidPackageId,
+    dealerPriceMode,
+    cellPriceMode,
+    excludedRowIds,
+    responderSort,
+    comparisonMode,
+    showProductColumn,
+    showBrandColumn,
+    showLeadTimeColumn,
+    showDealerNotesColumn
+  ])
+
   const includeAllRows = () => {
-    setExcludedRowIds([])
+    applyExcludedRowIds([])
   }
 
   const excludeAllRows = () => {
-    setExcludedRowIds((data.rows || []).map((row) => row.spec_item_id))
+    const next = (data.rows || []).map((row) => String(row.spec_item_id))
+    applyExcludedRowIds(next)
   }
 
   const toggleRowIncluded = (specItemId) => {
-    setExcludedRowIds((prev) => (
-      prev.includes(specItemId)
-        ? prev.filter((id) => id !== specItemId)
-        : [...prev, specItemId]
-    ))
+    const key = String(specItemId)
+    if (excludedRowIds.some((id) => String(id) === key)) {
+      removeExcludedRowId(key)
+    } else {
+      addExcludedRowId(key)
+    }
   }
 
-  const allRowsIncluded = (data.rows || []).length > 0 && excludedRowIds.length === 0
+  const allRowsIncluded = (data.rows || []).length > 0 && excludedRowIdSet.size === 0
 
   const sortedDealers = [...(data.dealers || [])].sort((a, b) => {
     const totalA = dealerTotalsById[a.invite_id]?.total || 0
@@ -296,6 +593,7 @@ export default function ComparisonPage() {
   const showAverageColumns = comparisonMode === 'average'
   const showDealerDeltaColumn = comparisonMode === 'average' || comparisonMode === 'competitive'
   const showDealerNextDeltaColumn = comparisonMode === 'competitive' && showNextBestDeltaColumn
+  const comparisonLocked = Boolean(awardedBidId)
   const metricColumnsPerResponder = 2 + (showDealerDeltaColumn ? 1 : 0) + (showDealerNextDeltaColumn ? 1 : 0)
   const optionalColumnsPerResponder = (showLeadTimeColumn ? 1 : 0) + (showDealerNotesColumn ? 1 : 0)
   const dealerColumnsPerResponder = metricColumnsPerResponder + optionalColumnsPerResponder
@@ -440,43 +738,81 @@ export default function ComparisonPage() {
       return rowSort.direction === 'asc' ? cmp : -cmp
     })
     return rows
-  }, [data.rows, rowSort, dealerPriceMode, comparisonMode, visibleDealerIds])
+  }, [data.rows, rowSort, dealerPriceMode, cellPriceMode, comparisonMode, visibleDealerIds])
 
-  const dealerQuoteSummary = (summary, totalRequested) => {
-    if (!summary || totalRequested <= 0) {
-      return {
-        line: '0 / 0 quoted (0 BoD)',
-        completionPct: 0,
-        bodSkippedPct: 0
+  const openAwardModal = (mode, dealer) => {
+    setAwardModal({
+      mode,
+      dealer,
+      comparisonSnapshot: {
+        dealerPriceMode: { ...dealerPriceMode },
+        cellPriceMode: { ...cellPriceMode },
+        excludedSpecItemIds: [...excludedRowIds]
       }
-    }
-
-    const bodOnly = summary.bodOnlyCount || 0
-    const mixed = summary.mixedLineCount || 0
-    const altOnly = summary.altOnlyCount || 0
-    const quoted = bodOnly + mixed + altOnly
-
-    const parts = []
-    if (bodOnly > 0) parts.push(`${bodOnly} BoD`)
-    if (mixed > 0) parts.push(`${mixed} BoD+Sub`)
-    if (altOnly > 0) parts.push(`${altOnly} Sub`)
-    if (parts.length === 0) parts.push('0 BoD')
-    const completionPct = totalRequested > 0 ? (quoted / totalRequested) * 100 : 0
-    const rowsWithBod = bodOnly + mixed
-    const bodSkippedCount = Math.max(totalRequested - rowsWithBod, 0)
-    const bodSkippedPct = totalRequested > 0 ? (bodSkippedCount / totalRequested) * 100 : 0
-
-    return {
-      line: `${quoted} / ${totalRequested} quoted (${parts.join(' · ')})`,
-      completionPct,
-      bodSkippedPct
-    }
+    })
   }
 
-  const toggleDealer = (inviteId) => {
-    setVisibleDealerIds((prev) => (
-      prev.includes(inviteId) ? prev.filter((id) => id !== inviteId) : [...prev, inviteId]
-    ))
+  const closeAwardModal = () => {
+    if (awardSaving) return
+    setAwardModal(null)
+  }
+
+  const submitAward = async () => {
+    if (!awardModal || !loadedBidPackageId) return
+
+    setAwardSaving(true)
+    setStatusMessage(
+      awardModal.mode === 'change'
+        ? 'Changing award...'
+        : awardModal.mode === 'clear'
+          ? 'Removing award...'
+          : 'Awarding vendor...'
+    )
+    try {
+      const awardTotalSnapshot = numberOrNull(
+        awardModal.dealer?.invite_id != null
+          ? dealerTotalsById[awardModal.dealer.invite_id]?.total
+          : null
+      )
+      const payload = {
+        bidPackageId: loadedBidPackageId,
+        bidId: awardModal.dealer?.bid_id,
+        awardedAmountSnapshot: awardModal.mode === 'clear' ? undefined : awardTotalSnapshot,
+        cellPriceMode: awardModal.comparisonSnapshot?.cellPriceMode || cellPriceMode,
+        excludedSpecItemIds: awardModal.comparisonSnapshot?.excludedSpecItemIds || excludedRowIds
+      }
+
+      if (awardModal.mode === 'change') {
+        await changeBidPackageAward(payload)
+      } else if (awardModal.mode === 'clear') {
+        await clearBidPackageAward(payload)
+      } else {
+        await awardBidPackage(payload)
+      }
+
+      setStatusMessage(
+        awardModal.mode === 'change'
+          ? 'Award reassigned.'
+          : awardModal.mode === 'clear'
+            ? 'Award removed.'
+            : 'Vendor awarded.'
+      )
+      const snapshot = awardModal.comparisonSnapshot || {
+        dealerPriceMode,
+        cellPriceMode,
+        excludedSpecItemIds: excludedRowIds
+      }
+      await loadComparisonForBidPackage(loadedBidPackageId, {
+        dealerPriceMode: snapshot.dealerPriceMode,
+        cellPriceMode: snapshot.cellPriceMode,
+        excludedSpecItemIds: snapshot.excludedSpecItemIds
+      })
+      setAwardModal(null)
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setAwardSaving(false)
+    }
   }
 
   useEffect(() => {
@@ -529,38 +865,16 @@ export default function ComparisonPage() {
     table.scrollBy({ left: distance, behavior: 'smooth' })
   }
 
-  const handleTableMouseDown = (event) => {
-    if (scrollMax <= 0) return
-    const table = tableScrollRef.current
-    if (!table) return
-    dragStateRef.current = {
-      active: true,
-      startX: event.clientX,
-      startLeft: table.scrollLeft
-    }
-    setIsDraggingTable(true)
-  }
-
-  const handleTableMouseMove = (event) => {
-    if (!dragStateRef.current.active) return
-    const table = tableScrollRef.current
-    if (!table) return
-    event.preventDefault()
-    const deltaX = event.clientX - dragStateRef.current.startX
-    table.scrollLeft = dragStateRef.current.startLeft - deltaX
-  }
-
-  const stopTableDragging = () => {
-    if (!dragStateRef.current.active) return
-    dragStateRef.current.active = false
-    setIsDraggingTable(false)
-  }
+  const handleTableMouseDown = () => {}
+  const handleTableMouseMove = () => {}
+  const stopTableDragging = () => {}
 
   const handleExportChange = (format) => {
     if (!loadedBidPackageId || !format) return
     const url = comparisonExportUrl(
       loadedBidPackageId,
       dealerPriceMode,
+      cellPriceMode,
       format,
       excludedRowIds,
       comparisonMode,
@@ -594,106 +908,41 @@ export default function ComparisonPage() {
 
   return (
     <div className="stack">
-      <SectionCard title="Comparison Dashboard">
-        <div className="form-grid">
-          <label>
-            Bid Package
-            <select
-              value={selectedBidPackageId}
-              onChange={(event) => setSelectedBidPackageId(event.target.value)}
-              disabled={loadingPackages}
-            >
-              {bidPackages.length === 0 ? <option value="">No bid packages yet</option> : null}
-              {bidPackages.map((pkg) => (
-                <option key={pkg.id} value={pkg.id}>
-                  {pkg.name} in {pkg.project_name || 'Unknown Project'} (Bid Package ID: {pkg.id}, Project ID: {pkg.project_id ?? '—'})
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        <div className="action-row">
-          <button className="btn btn-primary" onClick={loadComparison} disabled={!selectedBidPackageId || loading || loadingPackages}>
-            Load Bid Package
-          </button>
-        </div>
-
-        {statusMessage ? <p className="text-muted">{statusMessage}</p> : null}
-      </SectionCard>
-
-      <SectionCard title="Responder Summary">
-        <div className="responder-controls">
-          <label>
-            Sort
-            <select value={responderSort} onChange={(event) => setResponderSort(event.target.value)}>
-              <option value="lowest_bid">Lowest Bid</option>
-              <option value="highest_bid">Highest Bid</option>
-              <option value="dealer_name">Dealer Name</option>
-            </select>
-          </label>
-        </div>
-        <div className="responder-list">
-          {sortedDealers.map((dealer) => {
-            const summaryCopy = dealerQuoteSummary(dealerQuoteCountsById[dealer.invite_id], data.rows.length)
-            return (
-            <label key={dealer.invite_id} className="responder-item">
-              <input
-                type="checkbox"
-                checked={visibleDealerIds.includes(dealer.invite_id)}
-                onChange={() => toggleDealer(dealer.invite_id)}
-              />
-              <span className="responder-name-wrap">
-                <span className="responder-name">{companyName(dealer.dealer_name)}</span>
-                <span className="responder-meta responder-category">
-                  {summaryCopy.line}
-                </span>
-                <span className="summary-inline-row">
-                  <span className={`completion-pill ${summaryCopy.completionPct >= 100 ? 'complete' : 'incomplete'}`}>
-                    {summaryCopy.completionPct.toFixed(0)}% complete
-                  </span>
-                  {summaryCopy.bodSkippedPct > 0 ? (
-                    <span className="completion-pill warning">
-                      {summaryCopy.bodSkippedPct.toFixed(0)}% BoD skipped
-                    </span>
-                  ) : null}
-                  {(dealerQuoteCountsById[dealer.invite_id]?.mixedLineCount || 0) > 0 ? (
-                    <span className="summary-toggle-row">
-                      <span className="quote-toggle">
-                        <button
-                          type="button"
-                          className={`quote-toggle-btn ${(dealerPriceMode[dealer.invite_id] || 'bod') === 'bod' ? 'active' : ''}`}
-                          onClick={(event) => {
-                            event.preventDefault()
-                            setDealerPriceMode((prev) => ({ ...prev, [dealer.invite_id]: 'bod' }))
-                          }}
-                        >
-                          BoD
-                        </button>
-                        <button
-                          type="button"
-                          className={`quote-toggle-btn ${(dealerPriceMode[dealer.invite_id] || 'bod') === 'alt' ? 'active' : ''}`}
-                          onClick={(event) => {
-                            event.preventDefault()
-                            setDealerPriceMode((prev) => ({ ...prev, [dealer.invite_id]: 'alt' }))
-                          }}
-                        >
-                          Sub
-                        </button>
-                      </span>
-                    </span>
-                  ) : null}
-                </span>
-              </span>
-              <span className="responder-total">{money(dealerTotalsById[dealer.invite_id]?.total)}</span>
+      {!launchedFromDashboard ? (
+        <SectionCard title="Comparison Dashboard">
+          <div className="form-grid">
+            <label>
+              Bid Package
+              <select
+                value={selectedBidPackageId}
+                onChange={(event) => setSelectedBidPackageId(event.target.value)}
+                disabled={loadingPackages}
+              >
+                {bidPackages.length === 0 ? <option value="">No bid packages yet</option> : null}
+                {bidPackages.map((pkg) => (
+                  <option key={pkg.id} value={pkg.id}>
+                    {pkg.name} in {pkg.project_name || 'Unknown Project'} (Bid Package ID: {pkg.id}, Project ID: {pkg.project_id ?? '—'})
+                  </option>
+                ))}
+              </select>
             </label>
-            )
-          })}
-          {(data.dealers || []).length === 0 ? (
-            <p className="text-muted">Load comparison to see responders.</p>
+          </div>
+
+          <div className="action-row">
+            <button className="btn btn-primary" onClick={loadComparison} disabled={!selectedBidPackageId || loading || loadingPackages}>
+              Load Bid Package
+            </button>
+          </div>
+
+          {awardedBidId ? (
+            <p className="text-muted">
+              Awarded mode is active. Use and BoD/Sub selection are read-only.
+              {awardedAt ? ` Awarded at ${new Date(awardedAt).toLocaleString()}.` : ''}
+            </p>
           ) : null}
-        </div>
-      </SectionCard>
+          {statusMessage ? <p className="text-muted">{statusMessage}</p> : null}
+        </SectionCard>
+      ) : null}
 
       <SectionCard
         title="Line Item Comparison"
@@ -742,6 +991,14 @@ export default function ComparisonPage() {
                 </select>
               </label>
               <label>
+                Sort
+                <select value={responderSort} onChange={(event) => setResponderSort(event.target.value)}>
+                  <option value="lowest_bid">Lowest Bid</option>
+                  <option value="highest_bid">Highest Bid</option>
+                  <option value="dealer_name">Dealer Name</option>
+                </select>
+              </label>
+              <label>
                 Export
                 <select
                   defaultValue=""
@@ -755,10 +1012,51 @@ export default function ComparisonPage() {
                   <option value="xlsx">XLSX</option>
                 </select>
               </label>
+              <button
+                className="btn"
+                type="button"
+                onClick={resetComparisonView}
+                disabled={loading}
+              >
+                Reset View
+              </button>
+              {launchedFromDashboard ? (
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={() => {
+                    const bidPackageId = loadedBidPackageId || selectedBidPackageId || forcedBidPackageId
+                    if (bidPackageId) {
+                      storeComparisonState(String(bidPackageId), {
+                        dealerPriceMode: dealerPriceModeRef.current,
+                        cellPriceMode: cellPriceModeRef.current,
+                        excludedSpecItemIds: excludedRowIdsRef.current,
+                        responderSort: responderSortRef.current,
+                        comparisonMode: comparisonModeRef.current,
+                        showProductColumn: showProductColumnRef.current,
+                        showBrandColumn: showBrandColumnRef.current,
+                        showLeadTimeColumn: showLeadTimeColumnRef.current,
+                        showDealerNotesColumn: showDealerNotesColumnRef.current
+                      })
+                    }
+                    navigate('/package')
+                  }}
+                  disabled={loading}
+                >
+                  Close
+                </button>
+              ) : null}
             </div>
           ) : null
         }
       >
+        {launchedFromDashboard && statusMessage ? <p className="text-muted">{statusMessage}</p> : null}
+        {launchedFromDashboard && awardedBidId ? (
+          <p className="text-muted">
+            Awarded mode is active. Comparison controls are read-only.
+            {awardedAt ? ` Awarded at ${new Date(awardedAt).toLocaleString()}.` : ''}
+          </p>
+        ) : null}
         <div className="table-scroll-top" aria-label="Horizontal scroll control">
           <button
             type="button"
@@ -779,33 +1077,30 @@ export default function ComparisonPage() {
           <span className="table-scroll-hint">Drag table left/right</span>
         </div>
         <div
-          className={`table-scroll ${scrollMax > 0 ? 'drag-enabled' : ''} ${isDraggingTable ? 'is-dragging' : ''}`}
+          className="table-scroll"
           ref={tableScrollRef}
+          style={launchedFromDashboard ? { height: 'calc(100dvh - 195px)', maxHeight: 'calc(100dvh - 195px)' } : undefined}
           onScroll={syncFromTable}
-          onMouseDown={handleTableMouseDown}
-          onMouseMove={handleTableMouseMove}
-          onMouseUp={stopTableDragging}
-          onMouseLeave={stopTableDragging}
         >
         <div className="comparison-table-inner" ref={tableInnerRef}>
         <table className="table comparison-table" style={{ minWidth: `${tableMinWidth}px` }}>
           <thead>
             <tr>
               <th rowSpan={2}>
-                <span className="comparison-use-header">
+                <label className="comparison-use-header">
                   <span>Use</span>
                   <input
-                    className="row-toggle-input"
                     type="checkbox"
+                    className="row-toggle-input"
                     checked={allRowsIncluded}
                     onChange={(event) => {
                       if (event.target.checked) includeAllRows()
                       else excludeAllRows()
                     }}
-                    aria-label="Select or unselect all rows"
-                    disabled={(data.rows || []).length === 0}
+                    disabled={(data.rows || []).length === 0 || comparisonLocked}
+                    aria-label="Toggle all rows"
                   />
-                </span>
+                </label>
               </th>
               <th rowSpan={2}>
                 <button className="th-sort-btn" onClick={() => cycleSort('sku')}>
@@ -833,36 +1128,79 @@ export default function ComparisonPage() {
                 </th>
               ) : null}
               {showAverageColumns ? <th rowSpan={2}>Avg Extended</th> : null}
-              {visibleDealers.map((dealer) => (
-                <th
-                  key={`group-${dealer.invite_id}`}
-                  colSpan={dealerColumnsPerResponder}
-                  className="dealer-group-header dealer-block-start dealer-block-end"
-                >
-                  {companyName(dealer.dealer_name)}
-                </th>
-              ))}
+                {visibleDealers.map((dealer) => (
+                  (() => {
+                    const status = selectionStatusForDealer(dealer, awardedBidId)
+                    const isAwarded = status === 'awarded'
+                    const canAward = !awardedBidId && Boolean(dealer.bid_id)
+                    const canChangeAward = Boolean(awardedBidId) && !isAwarded && Boolean(dealer.bid_id)
+                    const canClearAward = Boolean(awardedBidId) && isAwarded
+                    return (
+                      <th
+                        key={`group-${dealer.invite_id}`}
+                        colSpan={dealerColumnsPerResponder}
+                        className={`dealer-group-header dealer-block-start dealer-block-end ${awardedBidId && dealer.bid_id === awardedBidId ? 'dealer-group-awarded' : ''}`.trim()}
+                      >
+                        <div className="dealer-group-header-inner">
+                          <div className="dealer-group-header-actions">
+                            {canAward ? (
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-award"
+                                onClick={() => openAwardModal('award', dealer)}
+                                disabled={loading || awardSaving}
+                              >
+                                Award
+                              </button>
+                            ) : null}
+                            {canChangeAward ? (
+                              <button
+                                type="button"
+                                className="btn btn-award-change"
+                                onClick={() => openAwardModal('change', dealer)}
+                                disabled={loading || awardSaving}
+                              >
+                                Change Award
+                              </button>
+                            ) : null}
+                            {canClearAward ? (
+                              <button
+                                type="button"
+                                className="btn btn-award-change"
+                                onClick={() => openAwardModal('clear', dealer)}
+                                disabled={loading || awardSaving}
+                              >
+                                Remove Award
+                              </button>
+                            ) : null}
+                          </div>
+                          <div className="dealer-group-header-name">{companyName(dealer.dealer_name)}</div>
+                        </div>
+                      </th>
+                    )
+                  })()
+                ))}
             </tr>
             <tr>
               {visibleDealers.map((dealer) => (
                 <Fragment key={dealer.invite_id}>
-                  <th className="dealer-block-start">
+                  <th className="dealer-block-start dealer-metric-header">
                     <button className="th-sort-btn" onClick={() => cycleSort('dealer_price', dealer.invite_id)}>
                       Unit Price{sortIndicator('dealer_price', dealer.invite_id)}
                     </button>
                   </th>
-                  {showLeadTimeColumn ? <th>Lead Time (Days)</th> : null}
-                  {showDealerNotesColumn ? <th>Notes</th> : null}
-                  <th>Extended</th>
+                  {showLeadTimeColumn ? <th className="dealer-metric-header">Lead Time (Days)</th> : null}
+                  {showDealerNotesColumn ? <th className="dealer-metric-header">Notes</th> : null}
+                  <th className="dealer-metric-header">Extended</th>
                   {showDealerDeltaColumn ? (
-                    <th className={showDealerNextDeltaColumn ? '' : 'dealer-block-end'}>
+                    <th className={`${showDealerNextDeltaColumn ? '' : 'dealer-block-end'} dealer-metric-header`.trim()}>
                       <button className="th-sort-btn" onClick={() => cycleSort('dealer_delta', dealer.invite_id)}>
                         {comparisonMode === 'competitive' ? '% Next Lower' : '% Avg Delta'}{sortIndicator('dealer_delta', dealer.invite_id)}
                       </button>
                     </th>
                   ) : null}
                   {showDealerNextDeltaColumn ? (
-                    <th className="dealer-block-end">
+                    <th className="dealer-block-end dealer-metric-header">
                       <button className="th-sort-btn" onClick={() => cycleSort('dealer_next_delta', dealer.invite_id)}>
                         % Next Higher{sortIndicator('dealer_next_delta', dealer.invite_id)}
                       </button>
@@ -877,14 +1215,17 @@ export default function ComparisonPage() {
               <tr key={row.spec_item_id} className={rowIncluded(row) ? '' : 'row-excluded'}>
                 <td>
                   <input
-                    className="row-toggle-input"
                     type="checkbox"
+                    className="row-toggle-input"
                     checked={rowIncluded(row)}
                     onChange={() => toggleRowIncluded(row.spec_item_id)}
-                    aria-label={`Include ${row.sku || row.product_name || 'line item'}`}
+                    disabled={comparisonLocked}
+                    aria-label={`Use ${row.sku || row.product_name || 'line item'}`}
                   />
                 </td>
-                <td>{row.sku || '—'}</td>
+                <td>
+                  <span>{row.sku || '—'}</span>
+                </td>
                 {showProductColumn ? (
                   <td className="comparison-col-product" title={row.product_name || ''}>
                     {row.product_name || '—'}
@@ -910,6 +1251,8 @@ export default function ComparisonPage() {
                   const nextBestDelta = nextBestDeltaDisplay(rowVisibleDealerPrices(row), effectivePrice)
                   const subPopoverKey = `${row.spec_item_id}-${dealer.invite_id}`
                   const notePopoverKey = `note-${row.spec_item_id}-${dealer.invite_id}`
+                  const modeKey = cellModeKey(row.spec_item_id, dealer.invite_id)
+                  const canSelectQuotePerCell = Boolean(cell?.has_bod_price && cell?.has_alt_price)
                   const dealerNote = String(cell?.dealer_notes || '').trim()
                   const cells = [
                     <td
@@ -917,6 +1260,34 @@ export default function ComparisonPage() {
                       className={`dealer-block-start num ${isBest ? 'best' : ''}`.trim()}
                     >
                       <div className="dealer-price-cell">
+                        {canSelectQuotePerCell ? (
+                          <span className="quote-toggle cell-quote-toggle">
+                            <button
+                              type="button"
+                              className={`quote-toggle-btn ${choice === 'bod' ? 'active' : ''}`}
+                              onClick={(event) => {
+                                event.preventDefault()
+                                event.stopPropagation()
+                                setCellPriceMode((prev) => ({ ...prev, [modeKey]: 'bod' }))
+                              }}
+                              disabled={comparisonLocked}
+                            >
+                              BoD
+                            </button>
+                            <button
+                              type="button"
+                              className={`quote-toggle-btn ${choice === 'alt' ? 'active' : ''}`}
+                              onClick={(event) => {
+                                event.preventDefault()
+                                event.stopPropagation()
+                                setCellPriceMode((prev) => ({ ...prev, [modeKey]: 'alt' }))
+                              }}
+                              disabled={comparisonLocked}
+                            >
+                              Sub
+                            </button>
+                          </span>
+                        ) : null}
                         {choice === 'alt' ? (
                           <span
                             className="sub-popover-wrap"
@@ -1207,7 +1578,7 @@ export default function ComparisonPage() {
 
         {(visibleDealers || []).length > 0 ? (
           <p className="text-muted">
-            Only Sub-priced selections are marked in-row; BoD is the default unless Sub is selected.
+            Use BoD/Sub toggles in each cell to override quote source per vendor per line item.
           </p>
         ) : null}
         {(visibleDealers || []).length > 0 ? (
@@ -1216,6 +1587,40 @@ export default function ComparisonPage() {
           </p>
         ) : null}
       </SectionCard>
+
+      {awardModal ? (
+        <div className="modal-backdrop" onClick={closeAwardModal}>
+          <div className="modal-card award-modal-card" onClick={(event) => event.stopPropagation()}>
+            <h3>{awardModal.mode === 'change' ? 'Change Award' : awardModal.mode === 'clear' ? 'Remove Award' : 'Award Vendor'}</h3>
+            <p>
+              {awardModal.mode === 'change'
+                ? `Change award to ${companyName(awardModal.dealer.dealer_name)}?`
+                : awardModal.mode === 'clear'
+                  ? `Remove award from ${companyName(awardModal.dealer.dealer_name)}?`
+                : `Award ${companyName(awardModal.dealer.dealer_name)}?`}
+            </p>
+            <p className="text-muted">
+              {awardModal.mode === 'change'
+                ? 'The current award will be removed and this vendor will become awarded.'
+                : awardModal.mode === 'clear'
+                  ? 'The bid package will return to bidding mode with no vendor selected.'
+                : 'The other bidders will be marked as Lost.'}
+            </p>
+            <div className="action-row">
+              <button type="button" className="btn" onClick={closeAwardModal} disabled={awardSaving}>Cancel</button>
+              <button type="button" className="btn btn-primary" onClick={submitAward} disabled={awardSaving}>
+                {awardSaving
+                  ? 'Saving...'
+                  : awardModal.mode === 'change'
+                    ? 'Change Award'
+                    : awardModal.mode === 'clear'
+                      ? 'Remove Award'
+                      : 'Award Vendor'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

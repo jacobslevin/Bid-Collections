@@ -12,15 +12,15 @@ const navItems = [
   { to: '/vendors', label: 'Vendors' },
   { to: '/projects', label: 'Projects' },
   { to: '/import', label: 'Import Package' },
-  { to: '/package', label: 'Bid Package Dashboard' },
-  { to: '/comparison', label: 'Comparison' }
+  { to: '/package', label: 'Bid Package Dashboard' }
 ]
 
 export default function App() {
   const location = useLocation()
   const isBidderPath = /^\/invite\/[^/]+(?:\/bid)?$/.test(location.pathname)
   const isPublicPath = /^\/public\/bid-packages\/[^/]+$/.test(location.pathname)
-  const hideTopbar = isBidderPath || isPublicPath
+  const isFocusedComparisonPath = location.pathname === '/comparison' && /[?&]bid_package_id=/.test(location.search || '')
+  const hideTopbar = isBidderPath || isPublicPath || isFocusedComparisonPath
 
   return (
     <div className={`app-shell ${hideTopbar ? 'app-shell-bidder' : ''}`.trim()}>

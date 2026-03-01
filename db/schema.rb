@@ -10,7 +10,26 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.1].define(version: 2026_02_26_170000) do
+ActiveRecord::Schema[7.1].define(version: 2026_03_01_012000) do
+  create_table "bid_award_events", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
+    t.bigint "bid_package_id", null: false
+    t.bigint "from_bid_id"
+    t.bigint "to_bid_id", null: false
+    t.integer "event_type", null: false
+    t.decimal "awarded_amount_snapshot", precision: 14, scale: 2, null: false
+    t.string "awarded_by", null: false
+    t.text "note"
+    t.datetime "awarded_at", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.json "comparison_snapshot"
+    t.index ["bid_package_id", "awarded_at"], name: "index_bid_award_events_on_bid_package_id_and_awarded_at"
+    t.index ["bid_package_id"], name: "index_bid_award_events_on_bid_package_id"
+    t.index ["event_type"], name: "index_bid_award_events_on_event_type"
+    t.index ["from_bid_id"], name: "index_bid_award_events_on_from_bid_id"
+    t.index ["to_bid_id"], name: "index_bid_award_events_on_to_bid_id"
+  end
+
   create_table "bid_line_items", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "bid_id", null: false
     t.bigint "spec_item_id", null: false
@@ -41,6 +60,9 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_26_170000) do
     t.json "active_general_fields", null: false
     t.string "public_token"
     t.text "instructions"
+    t.bigint "awarded_bid_id"
+    t.datetime "awarded_at"
+    t.index ["awarded_bid_id"], name: "index_bid_packages_on_awarded_bid_id"
     t.index ["project_id", "created_at"], name: "index_bid_packages_on_project_id_and_created_at"
     t.index ["project_id"], name: "index_bid_packages_on_project_id"
     t.index ["public_token"], name: "index_bid_packages_on_public_token", unique: true
@@ -72,7 +94,9 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_26_170000) do
     t.decimal "escalation_amount", precision: 14, scale: 2
     t.decimal "sales_tax_amount", precision: 14, scale: 2
     t.decimal "contingency_amount", precision: 14, scale: 2
+    t.integer "selection_status", default: 0, null: false
     t.index ["invite_id"], name: "index_bids_on_invite_id", unique: true
+    t.index ["selection_status"], name: "index_bids_on_selection_status"
     t.index ["state"], name: "index_bids_on_state"
   end
 
@@ -93,11 +117,44 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_26_170000) do
     t.index ["token"], name: "index_invites_on_token", unique: true
   end
 
+  create_table "post_award_uploads", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
+    t.bigint "bid_package_id", null: false
+    t.bigint "spec_item_id"
+    t.bigint "invite_id"
+    t.integer "uploader_role", default: 0, null: false
+    t.string "file_name", null: false
+    t.text "note"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.string "storage_path"
+    t.string "content_type"
+    t.bigint "byte_size"
+    t.index ["bid_package_id", "spec_item_id", "created_at"], name: "idx_post_award_uploads_lookup"
+    t.index ["bid_package_id"], name: "index_post_award_uploads_on_bid_package_id"
+    t.index ["invite_id"], name: "index_post_award_uploads_on_invite_id"
+    t.index ["spec_item_id"], name: "index_post_award_uploads_on_spec_item_id"
+  end
+
   create_table "projects", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.string "name", null: false
     t.text "description"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+  end
+
+  create_table "spec_item_requirement_approvals", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
+    t.bigint "bid_package_id", null: false
+    t.bigint "spec_item_id", null: false
+    t.string "requirement_key", null: false
+    t.datetime "approved_at", null: false
+    t.string "approved_by"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.bigint "bid_id"
+    t.index ["bid_id"], name: "index_spec_item_requirement_approvals_on_bid_id"
+    t.index ["bid_package_id"], name: "index_spec_item_requirement_approvals_on_bid_package_id"
+    t.index ["spec_item_id", "requirement_key", "bid_id"], name: "idx_spec_req_approvals_unique", unique: true
+    t.index ["spec_item_id"], name: "index_spec_item_requirement_approvals_on_spec_item_id"
   end
 
   create_table "spec_items", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
@@ -129,11 +186,21 @@ ActiveRecord::Schema[7.1].define(version: 2026_02_26_170000) do
     t.index ["bid_package_id"], name: "index_spec_items_on_bid_package_id"
   end
 
+  add_foreign_key "bid_award_events", "bid_packages"
+  add_foreign_key "bid_award_events", "bids", column: "from_bid_id"
+  add_foreign_key "bid_award_events", "bids", column: "to_bid_id"
   add_foreign_key "bid_line_items", "bids"
   add_foreign_key "bid_line_items", "spec_items"
+  add_foreign_key "bid_packages", "bids", column: "awarded_bid_id"
   add_foreign_key "bid_packages", "projects"
   add_foreign_key "bid_submission_versions", "bids"
   add_foreign_key "bids", "invites"
   add_foreign_key "invites", "bid_packages"
+  add_foreign_key "post_award_uploads", "bid_packages"
+  add_foreign_key "post_award_uploads", "invites"
+  add_foreign_key "post_award_uploads", "spec_items"
+  add_foreign_key "spec_item_requirement_approvals", "bid_packages"
+  add_foreign_key "spec_item_requirement_approvals", "bids"
+  add_foreign_key "spec_item_requirement_approvals", "spec_items"
   add_foreign_key "spec_items", "bid_packages"
 end

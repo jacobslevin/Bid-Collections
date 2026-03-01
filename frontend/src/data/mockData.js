@@ -37,7 +37,7 @@ export const previewRows = [
 export const invites = [
   { id: 1, dealer: 'Workplace Source', email: 'ops@workplace-source.com', status: 'submitted', lastSaved: '2026-02-13 10:22', submittedAt: '2026-02-13 10:27' },
   { id: 2, dealer: 'FurnishWest', email: 'bids@furnishwest.com', status: 'in_progress', lastSaved: '2026-02-13 09:54', submittedAt: '' },
-  { id: 3, dealer: 'Civic Interiors', email: '', status: 'not_started', lastSaved: '', submittedAt: '' }
+  { id: 3, dealer: 'Civic Interiors', email: '', status: 'no_activity', lastSaved: '', submittedAt: '' }
 ]
 
 export const dealerBidRows = previewRows.map((row, index) => ({

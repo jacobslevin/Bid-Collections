@@ -8,8 +8,13 @@ class BidPackage < ApplicationRecord
   ].freeze
 
   belongs_to :project
+  belongs_to :awarded_bid, class_name: 'Bid', optional: true
   has_many :spec_items, dependent: :destroy
   has_many :invites, dependent: :destroy
+  has_many :bids, through: :invites
+  has_many :bid_award_events, dependent: :destroy
+  has_many :spec_item_requirement_approvals, dependent: :destroy
+  has_many :post_award_uploads, dependent: :destroy
 
   enum :visibility, { private: 0, public: 1 }, default: :private, prefix: :visibility
 
@@ -26,6 +31,10 @@ class BidPackage < ApplicationRecord
 
   def active_general_field?(field_key)
     active_general_fields.include?(field_key.to_s)
+  end
+
+  def awarded?
+    awarded_bid_id.present?
   end
 
   private

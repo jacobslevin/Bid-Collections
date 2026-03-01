@@ -1,8 +1,9 @@
 module Comparison
   class BidPackageComparisonService
-    def initialize(bid_package:, price_modes: {}, excluded_spec_item_ids: [])
+    def initialize(bid_package:, price_modes: {}, cell_price_modes: {}, excluded_spec_item_ids: [])
       @bid_package = bid_package
       @price_modes = price_modes || {}
+      @cell_price_modes = cell_price_modes || {}
       @excluded_spec_item_ids = Array(excluded_spec_item_ids).map(&:to_i).uniq
     end
 
@@ -10,8 +11,11 @@ module Comparison
       submitted_bids = @bid_package.invites.includes(bid: :bid_line_items).map(&:bid).compact.select(&:submitted?)
       dealers = submitted_bids.map do |b|
         {
+          bid_id: b.id,
           invite_id: b.invite_id,
           dealer_name: b.invite.dealer_name,
+          selection_status: b.selection_status,
+          awarded: @bid_package.awarded_bid_id == b.id,
           delivery_amount: b.delivery_amount,
           install_amount: b.install_amount,
           escalation_amount: b.escalation_amount,
@@ -25,13 +29,21 @@ module Comparison
                          .order(:id)
                          .map do |spec_item|
         line_prices = submitted_bids.filter_map do |bid|
-          selected_line_item_for_spec_item(bid, spec_item.id, dealer_price_mode_for_invite(bid.invite_id))&.unit_net_price
+          selected_line_item_for_spec_item(
+            bid,
+            spec_item.id,
+            preferred_mode_for(spec_item.id, bid.invite_id)
+          )&.unit_net_price
         end
 
         avg = line_prices.any? ? (line_prices.sum / line_prices.size).to_d.round(4) : nil
 
         dealer_cells = submitted_bids.map do |bid|
-          details = line_item_details_for_spec_item(bid, spec_item.id, dealer_price_mode_for_invite(bid.invite_id))
+          details = line_item_details_for_spec_item(
+            bid,
+            spec_item.id,
+            preferred_mode_for(spec_item.id, bid.invite_id)
+          )
           price = details[:selected_line]&.unit_net_price
           {
             invite_id: bid.invite_id,
@@ -76,6 +88,8 @@ module Comparison
 
       {
         bid_package_id: @bid_package.id,
+        awarded_bid_id: @bid_package.awarded_bid_id,
+        awarded_at: @bid_package.awarded_at,
         active_general_fields: @bid_package.active_general_fields,
         dealers: dealers,
         rows: rows
@@ -87,6 +101,25 @@ module Comparison
     def dealer_price_mode_for_invite(invite_id)
       raw = @price_modes[invite_id.to_s] || @price_modes[invite_id.to_i]
       raw.to_s.downcase == 'alt' ? 'alt' : 'bod'
+    end
+
+    def cell_price_mode_for(spec_item_id, invite_id)
+      by_spec_item = @cell_price_modes[spec_item_id.to_s] || @cell_price_modes[spec_item_id.to_i]
+      return nil unless by_spec_item.respond_to?(:[])
+
+      raw = by_spec_item[invite_id.to_s] || by_spec_item[invite_id.to_i]
+      mode = raw.to_s.downcase
+      return 'alt' if mode == 'alt'
+      return 'bod' if mode == 'bod'
+
+      nil
+    end
+
+    def preferred_mode_for(spec_item_id, invite_id)
+      cell_mode = cell_price_mode_for(spec_item_id, invite_id)
+      return cell_mode if cell_mode.present?
+
+      dealer_price_mode_for_invite(invite_id)
     end
 
     def selected_line_item_for_spec_item(bid, spec_item_id, preferred_mode)

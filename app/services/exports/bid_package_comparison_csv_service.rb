@@ -5,6 +5,7 @@ module Exports
     def initialize(
       bid_package:,
       price_modes: {},
+      cell_price_modes: {},
       excluded_spec_item_ids: [],
       comparison_mode: 'average',
       show_product: true,
@@ -14,6 +15,7 @@ module Exports
     )
       @bid_package = bid_package
       @price_modes = price_modes || {}
+      @cell_price_modes = cell_price_modes || {}
       @excluded_spec_item_ids = Array(excluded_spec_item_ids).map(&:to_i).uniq
       @comparison_mode = comparison_mode.to_s
       @show_product = show_product
@@ -26,6 +28,7 @@ module Exports
       comparison = Comparison::BidPackageComparisonService.new(
         bid_package: @bid_package,
         price_modes: @price_modes,
+        cell_price_modes: @cell_price_modes,
         excluded_spec_item_ids: @excluded_spec_item_ids
       ).call
       dealers = comparison[:dealers]

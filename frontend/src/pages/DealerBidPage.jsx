@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import SectionCard from '../components/SectionCard'
-import { fetchDealerBid, saveDealerBid, submitDealerBid } from '../lib/api'
+import { API_BASE_URL, createDealerPostAwardUpload, fetchDealerBid, saveDealerBid, submitDealerBid } from '../lib/api'
 import bidClosedIcon from '../assets/vendor-bid/bid-closed.svg'
 import downloadCsvIcon from '../assets/vendor-bid/download-csv.svg'
 import dpLogo from '../assets/vendor-bid/dp-logo.svg'
@@ -186,6 +186,10 @@ export default function DealerBidPage() {
   const [lastSavedAt, setLastSavedAt] = useState(null)
   const [statusMessage, setStatusMessage] = useState('Loading bid...')
   const [loading, setLoading] = useState(false)
+  const [postAwardEnabled, setPostAwardEnabled] = useState(false)
+  const [awardedVendor, setAwardedVendor] = useState(false)
+  const [postAwardUploads, setPostAwardUploads] = useState([])
+  const [activeSpecUploadsModal, setActiveSpecUploadsModal] = useState(null)
 
   const rowIdentity = (row, index) => `${row.spec_item_id}-${row.is_substitution ? 'sub' : 'base'}-${index}`
 
@@ -264,6 +268,10 @@ export default function DealerBidPage() {
   const activityValue = bidState === 'submitted' ? formatTimestamp(submittedAt) : formatTimestamp(lastSavedAt)
   const activityIcon = bidState === 'submitted' ? submittedIcon : lastSavedIcon
   const statusIsError = /failed|error|must|cannot|invalid|not a number|greater than|less than|required|blank/i.test(statusMessage || '')
+  const winnerView = postAwardEnabled && awardedVendor
+  const statusTone = winnerView ? 'winner' : bidState
+  const statusLabel = winnerView ? 'winner' : bidState
+  const statusIcon = winnerView || bidState === 'submitted' ? submittedStatusIcon : draftIcon
 
   const downloadCsvTemplate = () => {
     const headers = [
@@ -441,6 +449,9 @@ export default function DealerBidPage() {
         ])
         setBidState(result.bid?.state || 'draft')
         setSubmittedAt(result.bid?.submitted_at || null)
+        setPostAwardEnabled(Boolean(result.bid?.post_award_enabled))
+        setAwardedVendor(Boolean(result.bid?.awarded_vendor))
+        setPostAwardUploads(result.bid?.post_award_uploads || [])
         setStatusMessage('Bid loaded.')
       } catch (error) {
         if (!active) return
@@ -583,6 +594,40 @@ export default function DealerBidPage() {
     }
   }
 
+  const uploadPostAwardFile = async (event, specItemId = null) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    if (!postAwardEnabled || !awardedVendor) {
+      setStatusMessage('Post-award upload is only available for the awarded vendor.')
+      event.target.value = ''
+      return
+    }
+
+    setLoading(true)
+    setStatusMessage('Uploading file...')
+    try {
+      const result = await createDealerPostAwardUpload(token, {
+        file,
+        fileName: file.name,
+        specItemId
+      })
+      const uploaded = result.upload
+      setPostAwardUploads((prev) => [uploaded, ...prev])
+      setStatusMessage('File uploaded.')
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setLoading(false)
+      event.target.value = ''
+    }
+  }
+
+  const uploadsForSpecItem = (specItemId) => (
+    postAwardUploads.filter((upload) => String(upload.spec_item_id || '') === String(specItemId))
+  )
+  const generalUploads = postAwardUploads.filter((upload) => !upload.spec_item_id)
+
   return (
     <div className="stack vendor-bid-page">
       <div className="vendor-brandline">
@@ -604,7 +649,7 @@ export default function DealerBidPage() {
               ? `${projectName}: ${bidPackageName}`
               : (bidPackageName || 'Project Name')}
           </h2>
-          {bidState === 'submitted' ? null : (
+          {bidState === 'submitted' || winnerView ? null : (
             <div className="action-row">
               <button className="btn vendor-strip-btn" onClick={handleSaveDraft} disabled={loading}>
                 <img src={saveWhiteIcon} alt="" className="vendor-btn-icon" />
@@ -619,10 +664,10 @@ export default function DealerBidPage() {
         </div>
         <div className="vendor-metric-grid">
           <div className="vendor-metric-card">
-            <img src={bidState === 'submitted' ? submittedStatusIcon : draftIcon} alt="" className="vendor-metric-icon" />
+            <img src={statusIcon} alt="" className="vendor-metric-icon" />
             <div>
               <div className="vendor-metric-label">STATUS</div>
-              <div className={`vendor-state-pill ${bidState}`}>{bidState}</div>
+              <div className={`vendor-state-pill ${statusTone}`}>{statusLabel}</div>
             </div>
           </div>
           <div className="vendor-metric-card">
@@ -658,25 +703,75 @@ export default function DealerBidPage() {
         </SectionCard>
       ) : null}
 
+      {postAwardEnabled ? (
+        <SectionCard title="Post-Award Uploads">
+          {!awardedVendor ? (
+            <p className="text-muted">A vendor has been awarded. Upload access is available to the awarded vendor only.</p>
+          ) : (
+            <div className="stack">
+              <div>
+                <label className="btn">
+                  Upload General File
+                  <input
+                    type="file"
+                    onChange={(event) => uploadPostAwardFile(event, null)}
+                    style={{ display: 'none' }}
+                    disabled={loading}
+                  />
+                </label>
+                <div className="text-muted" style={{ marginTop: '0.35rem' }}>
+                  {generalUploads.length} general file(s) uploaded
+                </div>
+                {generalUploads.length > 0 ? (
+                  <table className="table dense" style={{ marginTop: '0.45rem' }}>
+                    <thead>
+                      <tr>
+                        <th>File</th>
+                        <th>Uploaded</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {generalUploads.map((upload) => (
+                        <tr key={`general-upload-${upload.id}`}>
+                          <td>{upload.file_name || '—'}</td>
+                          <td>{formatTimestamp(upload.uploaded_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : null}
+              </div>
+              <p className="text-muted" style={{ margin: 0 }}>
+                Uploads per line item are managed directly in the Line Items table below.
+              </p>
+            </div>
+          )}
+        </SectionCard>
+      ) : null}
+
       <SectionCard
         title="Line Items"
         actions={
           <div className="action-row">
-            <button className="btn" onClick={downloadCsvTemplate}>
-              <img src={downloadCsvIcon} alt="" className="vendor-table-action-icon" />
-              Download CSV
-            </button>
-            <label className={`btn ${bidState === 'submitted' ? 'btn-disabled' : ''}`}>
-              <img src={importCsvIcon} alt="" className="vendor-table-action-icon" />
-              Import CSV
-              <input
-                type="file"
-                accept=".csv,text/csv"
-                onChange={importCsvFile}
-                style={{ display: 'none' }}
-                disabled={bidState === 'submitted'}
-              />
-            </label>
+            {winnerView ? null : (
+              <>
+                <button className="btn" onClick={downloadCsvTemplate}>
+                  <img src={downloadCsvIcon} alt="" className="vendor-table-action-icon" />
+                  Download CSV
+                </button>
+                <label className={`btn ${bidState === 'submitted' ? 'btn-disabled' : ''}`}>
+                  <img src={importCsvIcon} alt="" className="vendor-table-action-icon" />
+                  Import CSV
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={importCsvFile}
+                    style={{ display: 'none' }}
+                    disabled={bidState === 'submitted'}
+                  />
+                </label>
+              </>
+            )}
           </div>
         }
       >
@@ -689,189 +784,315 @@ export default function DealerBidPage() {
               <th>Product</th>
               <th>Brand</th>
               <th className="qty-col">Qty/UOM</th>
-              <th>Unit List Price</th>
-              <th>% Discount</th>
-              <th>% Tariff</th>
-              <th>Unit Net Price</th>
-              <th>Lead Time (days)</th>
-              <th>Notes</th>
+              {winnerView ? null : <th>Unit List Price</th>}
+              {winnerView ? null : <th>% Discount</th>}
+              {winnerView ? null : <th>% Tariff</th>}
+              {winnerView ? null : <th>Unit Net Price</th>}
+              {winnerView ? null : <th>Lead Time (days)</th>}
+              {winnerView ? null : <th>Notes</th>}
               <th>Extended Price</th>
+              {winnerView ? <th>Upload</th> : null}
+              {winnerView ? <th>Files</th> : null}
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, index) => (
-              <tr key={rowIdentity(row, index)} className={row.is_substitution ? 'substitution-row' : ''}>
-                <td className="vendor-row-index">
-                  {rowDisplayNumberBySpec.get(row.spec_item_id)}{row.is_substitution ? ' Sub' : ''}
-                </td>
-                <td>
-                  {row.sku || '—'}
-                  {row.is_substitution ? <span className="substitution-chip">Sub</span> : null}
-                  {!row.is_substitution && bidState !== 'submitted' && !hasSubstitutionForSpec(row.spec_item_id) ? (
-                    <button className="mini-link-btn" type="button" onClick={() => addSubstitutionRow(index)}>
-                      + Add Substitution
-                    </button>
-                  ) : null}
-                  {row.is_substitution && bidState !== 'submitted' ? (
-                    <button className="mini-link-btn danger" type="button" onClick={() => removeSubstitutionRow(index)}>
-                      Remove Substitution
-                    </button>
-                  ) : null}
-                </td>
-                <td>
-                  {row.is_substitution ? (
+            {rows.map((row, index) => {
+              const rowUploads = uploadsForSpecItem(row.spec_item_id)
+              if (winnerView) {
+                return (
+                  <tr key={rowIdentity(row, index)}>
+                    <td className="vendor-row-index">
+                      {rowDisplayNumberBySpec.get(row.spec_item_id)}
+                    </td>
+                    <td>
+                      {row.sku || '—'}
+                      {row.approved_source === 'alt' || row.is_substitution ? <span className="substitution-chip">Sub</span> : null}
+                    </td>
+                    <td>{row.product_name || '—'}</td>
+                    <td>{row.brand_name || '—'}</td>
+                    <td className="qty-col">{row.quantity || '—'} {row.uom || ''}</td>
+                    <td>{money(extendedAmount(netUnitPrice(row.unit_price, row.discount_percent, row.tariff_percent), row.quantity))}</td>
+                    <td>
+                      <label className="btn">
+                        Upload File
+                        <input
+                          type="file"
+                          onChange={(event) => uploadPostAwardFile(event, row.spec_item_id)}
+                          style={{ display: 'none' }}
+                          disabled={loading}
+                        />
+                      </label>
+                    </td>
+                    <td>
+                      {rowUploads.length > 0 ? (
+                        <div className="action-row" style={{ gap: '0.4rem' }}>
+                          <span>{rowUploads.length} file(s)</span>
+                          <button
+                            type="button"
+                            className="btn mini-link-btn"
+                            style={{ marginTop: 0 }}
+                            onClick={() => setActiveSpecUploadsModal({
+                              specItemId: row.spec_item_id,
+                              codeTag: row.sku || '—',
+                              productName: row.product_name || '—'
+                            })}
+                          >
+                            View
+                          </button>
+                        </div>
+                      ) : '—'}
+                    </td>
+                  </tr>
+                )
+              }
+
+              return (
+                <tr key={rowIdentity(row, index)} className={row.is_substitution ? 'substitution-row' : ''}>
+                  <td className="vendor-row-index">
+                    {rowDisplayNumberBySpec.get(row.spec_item_id)}{row.is_substitution ? ' Sub' : ''}
+                  </td>
+                  <td>
+                    {row.sku || '—'}
+                    {row.is_substitution ? <span className="substitution-chip">Sub</span> : null}
+                    {!row.is_substitution && bidState !== 'submitted' && !hasSubstitutionForSpec(row.spec_item_id) ? (
+                      <button className="mini-link-btn" type="button" onClick={() => addSubstitutionRow(index)}>
+                        + Add Substitution
+                      </button>
+                    ) : null}
+                    {row.is_substitution && bidState !== 'submitted' ? (
+                      <button className="mini-link-btn danger" type="button" onClick={() => removeSubstitutionRow(index)}>
+                        Remove Substitution
+                      </button>
+                    ) : null}
+                  </td>
+                  <td>
+                    {row.is_substitution ? (
+                      <input
+                        value={row.product_name ?? ''}
+                        onChange={(event) => updateRow(index, 'product_name', event.target.value)}
+                        placeholder="Substitution product"
+                        disabled={bidState === 'submitted'}
+                      />
+                    ) : (
+                      row.product_name || '—'
+                    )}
+                  </td>
+                  <td>
+                    {row.is_substitution ? (
+                      <input
+                        value={row.brand_name ?? ''}
+                        onChange={(event) => updateRow(index, 'brand_name', event.target.value)}
+                        placeholder="Substitution brand"
+                        disabled={bidState === 'submitted'}
+                      />
+                    ) : (
+                      row.brand_name || '—'
+                    )}
+                  </td>
+                  <td className="qty-col">{row.quantity || '—'} {row.uom || ''}</td>
+                  <td>
                     <input
-                      value={row.product_name ?? ''}
-                      onChange={(event) => updateRow(index, 'product_name', event.target.value)}
-                      placeholder="Substitution product"
+                      value={row.unit_price ?? ''}
+                      onChange={(event) => updateRow(index, 'unit_price', event.target.value)}
+                      className={rowFieldError(row, 'unit_price') ? 'input-error' : ''}
                       disabled={bidState === 'submitted'}
                     />
-                  ) : (
-                    row.product_name || '—'
-                  )}
-                </td>
-                <td>
-                  {row.is_substitution ? (
+                  </td>
+                  <td>
                     <input
-                      value={row.brand_name ?? ''}
-                      onChange={(event) => updateRow(index, 'brand_name', event.target.value)}
-                      placeholder="Substitution brand"
+                      value={row.discount_percent ?? ''}
+                      onChange={(event) => updateRow(index, 'discount_percent', event.target.value)}
+                      className={rowFieldError(row, 'discount_percent') ? 'input-error' : ''}
                       disabled={bidState === 'submitted'}
                     />
-                  ) : (
-                    row.brand_name || '—'
-                  )}
-                </td>
-                <td className="qty-col">{row.quantity || '—'} {row.uom || ''}</td>
-                <td>
-                  <input
-                    value={row.unit_price ?? ''}
-                    onChange={(event) => updateRow(index, 'unit_price', event.target.value)}
-                    className={rowFieldError(row, 'unit_price') ? 'input-error' : ''}
-                    disabled={bidState === 'submitted'}
-                  />
-                </td>
-                <td>
-                  <input
-                    value={row.discount_percent ?? ''}
-                    onChange={(event) => updateRow(index, 'discount_percent', event.target.value)}
-                    className={rowFieldError(row, 'discount_percent') ? 'input-error' : ''}
-                    disabled={bidState === 'submitted'}
-                  />
-                </td>
-                <td>
-                  <input
-                    value={row.tariff_percent ?? ''}
-                    onChange={(event) => updateRow(index, 'tariff_percent', event.target.value)}
-                    className={rowFieldError(row, 'tariff_percent') ? 'input-error' : ''}
-                    disabled={bidState === 'submitted'}
-                  />
-                </td>
-                <td>{money(netUnitPrice(row.unit_price, row.discount_percent, row.tariff_percent))}</td>
-                <td>
-                  <input
-                    value={row.lead_time_days ?? ''}
-                    onChange={(event) => updateRow(index, 'lead_time_days', event.target.value)}
-                    placeholder="30 or 30-45"
-                    className={rowFieldError(row, 'lead_time_days') ? 'input-error' : ''}
-                    disabled={bidState === 'submitted'}
-                  />
-                </td>
-                <td>
-                  <input
-                    value={row.dealer_notes ?? ''}
-                    onChange={(event) => updateRow(index, 'dealer_notes', event.target.value)}
-                    disabled={bidState === 'submitted'}
-                  />
-                </td>
-                <td>{money(extendedAmount(netUnitPrice(row.unit_price, row.discount_percent, row.tariff_percent), row.quantity))}</td>
-              </tr>
-            ))}
+                  </td>
+                  <td>
+                    <input
+                      value={row.tariff_percent ?? ''}
+                      onChange={(event) => updateRow(index, 'tariff_percent', event.target.value)}
+                      className={rowFieldError(row, 'tariff_percent') ? 'input-error' : ''}
+                      disabled={bidState === 'submitted'}
+                    />
+                  </td>
+                  <td>{money(netUnitPrice(row.unit_price, row.discount_percent, row.tariff_percent))}</td>
+                  <td>
+                    <input
+                      value={row.lead_time_days ?? ''}
+                      onChange={(event) => updateRow(index, 'lead_time_days', event.target.value)}
+                      placeholder="30 or 30-45"
+                      className={rowFieldError(row, 'lead_time_days') ? 'input-error' : ''}
+                      disabled={bidState === 'submitted'}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      value={row.dealer_notes ?? ''}
+                      onChange={(event) => updateRow(index, 'dealer_notes', event.target.value)}
+                      disabled={bidState === 'submitted'}
+                    />
+                  </td>
+                  <td>{money(extendedAmount(netUnitPrice(row.unit_price, row.discount_percent, row.tariff_percent), row.quantity))}</td>
+                </tr>
+              )
+            })}
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={12} className="text-muted">No line items loaded.</td>
+                <td colSpan={winnerView ? 8 : 12} className="text-muted">No line items loaded.</td>
               </tr>
             ) : null}
           </tbody>
           {rows.length > 0 ? (
             <tfoot>
               <tr className="total-row">
-                <td colSpan={11} style={{ textAlign: 'right' }}>Sub-total</td>
+                <td colSpan={winnerView ? 5 : 11} style={{ textAlign: 'right' }}>Sub-total</td>
                 <td>{money(subtotal)}</td>
+                {winnerView ? <td></td> : null}
+                {winnerView ? <td></td> : null}
               </tr>
               {activeGeneralFields.includes('delivery_amount') ? (
               <tr>
-                <td colSpan={11} style={{ textAlign: 'right' }}>Shipping</td>
+                <td colSpan={winnerView ? 5 : 11} style={{ textAlign: 'right' }}>Shipping</td>
                 <td>
-                  <input
-                    value={deliveryAmount}
-                    onChange={(event) => setDeliveryAmount(event.target.value)}
-                    className={!isNonNegativeNumberOrBlank(deliveryAmount) ? 'input-error' : ''}
-                    disabled={bidState === 'submitted'}
-                  />
+                  {winnerView ? money(deliveryAmount) : (
+                    <input
+                      value={deliveryAmount}
+                      onChange={(event) => setDeliveryAmount(event.target.value)}
+                      className={!isNonNegativeNumberOrBlank(deliveryAmount) ? 'input-error' : ''}
+                      disabled={bidState === 'submitted'}
+                    />
+                  )}
                 </td>
+                {winnerView ? <td></td> : null}
+                {winnerView ? <td></td> : null}
               </tr>
               ) : null}
               {activeGeneralFields.includes('install_amount') ? (
               <tr>
-                <td colSpan={11} style={{ textAlign: 'right' }}>Install</td>
+                <td colSpan={winnerView ? 5 : 11} style={{ textAlign: 'right' }}>Install</td>
                 <td>
-                  <input
-                    value={installAmount}
-                    onChange={(event) => setInstallAmount(event.target.value)}
-                    className={!isNonNegativeNumberOrBlank(installAmount) ? 'input-error' : ''}
-                    disabled={bidState === 'submitted'}
-                  />
+                  {winnerView ? money(installAmount) : (
+                    <input
+                      value={installAmount}
+                      onChange={(event) => setInstallAmount(event.target.value)}
+                      className={!isNonNegativeNumberOrBlank(installAmount) ? 'input-error' : ''}
+                      disabled={bidState === 'submitted'}
+                    />
+                  )}
                 </td>
+                {winnerView ? <td></td> : null}
+                {winnerView ? <td></td> : null}
               </tr>
               ) : null}
               {activeGeneralFields.includes('escalation_amount') ? (
               <tr>
-                <td colSpan={11} style={{ textAlign: 'right' }}>Escalation</td>
+                <td colSpan={winnerView ? 5 : 11} style={{ textAlign: 'right' }}>Escalation</td>
                 <td>
-                  <input
-                    value={escalationAmount}
-                    onChange={(event) => setEscalationAmount(event.target.value)}
-                    className={!isNonNegativeNumberOrBlank(escalationAmount) ? 'input-error' : ''}
-                    disabled={bidState === 'submitted'}
-                  />
+                  {winnerView ? money(escalationAmount) : (
+                    <input
+                      value={escalationAmount}
+                      onChange={(event) => setEscalationAmount(event.target.value)}
+                      className={!isNonNegativeNumberOrBlank(escalationAmount) ? 'input-error' : ''}
+                      disabled={bidState === 'submitted'}
+                    />
+                  )}
                 </td>
+                {winnerView ? <td></td> : null}
+                {winnerView ? <td></td> : null}
               </tr>
               ) : null}
               {activeGeneralFields.includes('contingency_amount') ? (
               <tr>
-                <td colSpan={11} style={{ textAlign: 'right' }}>Contingency</td>
+                <td colSpan={winnerView ? 5 : 11} style={{ textAlign: 'right' }}>Contingency</td>
                 <td>
-                  <input
-                    value={contingencyAmount}
-                    onChange={(event) => setContingencyAmount(event.target.value)}
-                    className={!isNonNegativeNumberOrBlank(contingencyAmount) ? 'input-error' : ''}
-                    disabled={bidState === 'submitted'}
-                  />
+                  {winnerView ? money(contingencyAmount) : (
+                    <input
+                      value={contingencyAmount}
+                      onChange={(event) => setContingencyAmount(event.target.value)}
+                      className={!isNonNegativeNumberOrBlank(contingencyAmount) ? 'input-error' : ''}
+                      disabled={bidState === 'submitted'}
+                    />
+                  )}
                 </td>
+                {winnerView ? <td></td> : null}
+                {winnerView ? <td></td> : null}
               </tr>
               ) : null}
               {activeGeneralFields.includes('sales_tax_amount') ? (
               <tr>
-                <td colSpan={11} style={{ textAlign: 'right' }}>Sales Tax</td>
+                <td colSpan={winnerView ? 5 : 11} style={{ textAlign: 'right' }}>Sales Tax</td>
                 <td>
-                  <input
-                    value={salesTaxAmount}
-                    onChange={(event) => setSalesTaxAmount(event.target.value)}
-                    className={!isNonNegativeNumberOrBlank(salesTaxAmount) ? 'input-error' : ''}
-                    disabled={bidState === 'submitted'}
-                  />
+                  {winnerView ? money(salesTaxAmount) : (
+                    <input
+                      value={salesTaxAmount}
+                      onChange={(event) => setSalesTaxAmount(event.target.value)}
+                      className={!isNonNegativeNumberOrBlank(salesTaxAmount) ? 'input-error' : ''}
+                      disabled={bidState === 'submitted'}
+                    />
+                  )}
                 </td>
+                {winnerView ? <td></td> : null}
+                {winnerView ? <td></td> : null}
               </tr>
               ) : null}
               <tr className="total-row">
-                <td colSpan={11} style={{ textAlign: 'right' }}>Grand Total</td>
+                <td colSpan={winnerView ? 5 : 11} style={{ textAlign: 'right' }}>Grand Total</td>
                 <td>{money(grandTotal)}</td>
+                {winnerView ? <td></td> : null}
+                {winnerView ? <td></td> : null}
               </tr>
             </tfoot>
           ) : null}
         </table>
       </SectionCard>
+
+      {winnerView && activeSpecUploadsModal ? (
+        <div className="modal-backdrop" onClick={() => setActiveSpecUploadsModal(null)}>
+          <div className="modal-card award-modal-card" onClick={(event) => event.stopPropagation()}>
+            <div className="section-head">
+              <h2>{`Files · ${activeSpecUploadsModal.codeTag}`}</h2>
+              <button className="btn" onClick={() => setActiveSpecUploadsModal(null)}>Close</button>
+            </div>
+            <p className="text-muted" style={{ marginTop: 0 }}>{activeSpecUploadsModal.productName}</p>
+            <table className="table dense">
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Uploaded</th>
+                  <th>Download</th>
+                </tr>
+              </thead>
+              <tbody>
+                {uploadsForSpecItem(activeSpecUploadsModal.specItemId).map((upload) => (
+                  <tr key={`modal-upload-${upload.id}`}>
+                    <td>{upload.file_name || '—'}</td>
+                    <td>{formatTimestamp(upload.uploaded_at)}</td>
+                    <td>
+                      {upload.download_url ? (
+                        <a
+                          className="mini-link-btn"
+                          href={`${API_BASE_URL}${upload.download_url}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          download
+                        >
+                          Download
+                        </a>
+                      ) : (
+                        <span className="text-muted">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {uploadsForSpecItem(activeSpecUploadsModal.specItemId).length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="text-muted">No files uploaded yet.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

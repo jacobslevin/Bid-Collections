@@ -114,4 +114,43 @@ RSpec.describe 'Dealer Bid Flow API', type: :request do
     expect(response).to have_http_status(:unprocessable_entity)
     expect(json_response['errors'].join(' ')).to include("Unit price can't be blank")
   end
+
+  it 'locks bid updates after package is awarded' do
+    bid = invite.create_bid!(state: :submitted, submitted_at: Time.current)
+    bid_package.update!(awarded_bid: bid, awarded_at: Time.current)
+
+    post "/api/invites/#{invite.token}/unlock",
+         params: { password: 'bidpass123' }.to_json,
+         headers: { 'CONTENT_TYPE' => 'application/json' }
+
+    put "/api/invites/#{invite.token}/bid",
+        params: {
+          line_items: [
+            {
+              spec_item_id: spec_item.id,
+              unit_price: '130.0000'
+            }
+          ]
+        }.to_json,
+        headers: { 'CONTENT_TYPE' => 'application/json' }
+
+    expect(response).to have_http_status(:conflict)
+  end
+
+  it 'allows awarded vendor to upload post-award files' do
+    bid = invite.create_bid!(state: :submitted, submitted_at: Time.current)
+    bid_package.update!(awarded_bid: bid, awarded_at: Time.current)
+
+    post "/api/invites/#{invite.token}/unlock",
+         params: { password: 'bidpass123' }.to_json,
+         headers: { 'CONTENT_TYPE' => 'application/json' }
+
+    post "/api/invites/#{invite.token}/post_award_uploads",
+         params: { file_name: 'shop-drawing.pdf', spec_item_id: spec_item.id }.to_json,
+         headers: { 'CONTENT_TYPE' => 'application/json' }
+
+    expect(response).to have_http_status(:created)
+    expect(json_response.dig('upload', 'file_name')).to eq('shop-drawing.pdf')
+    expect(PostAwardUpload.count).to eq(1)
+  end
 end

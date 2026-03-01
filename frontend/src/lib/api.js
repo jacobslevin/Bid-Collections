@@ -1,13 +1,16 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:3000'
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:3000'
 
 async function request(path, options = {}) {
+  const isFormData = options.body instanceof FormData
   const response = await fetch(`${API_BASE_URL}${path}`, {
     credentials: 'include',
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {})
-    }
+    headers: isFormData
+      ? { ...(options.headers || {}) }
+      : {
+          'Content-Type': 'application/json',
+          ...(options.headers || {})
+        }
   })
 
   let data = null
@@ -119,6 +122,30 @@ export async function reactivateSpecItem({ bidPackageId, specItemId }) {
   })
 }
 
+export async function approveSpecItemRequirement({ bidPackageId, specItemId, requirementKey, approvedAt, approvedBy }) {
+  return request(`/api/bid_packages/${bidPackageId}/spec_items/${specItemId}/requirements/${requirementKey}/approve`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      approved_at: approvedAt,
+      approved_by: approvedBy
+    })
+  })
+}
+
+export async function unapproveSpecItemRequirement({ bidPackageId, specItemId, requirementKey }) {
+  return request(`/api/bid_packages/${bidPackageId}/spec_items/${specItemId}/requirements/${requirementKey}/unapprove`, {
+    method: 'PATCH',
+    body: JSON.stringify({})
+  })
+}
+
+export async function clearCurrentAwardApprovals({ bidPackageId }) {
+  return request(`/api/bid_packages/${bidPackageId}/clear_current_award_approvals`, {
+    method: 'PATCH',
+    body: JSON.stringify({})
+  })
+}
+
 export async function updateBidPackage({ bidPackageId, name, visibility, activeGeneralFields, instructions = '' }) {
   return request(`/api/bid_packages/${bidPackageId}`, {
     method: 'PATCH',
@@ -218,13 +245,107 @@ export async function updateInvitePassword({ bidPackageId, inviteId, password })
   })
 }
 
-export async function fetchComparison(bidPackageId) {
-  return request(`/api/bid_packages/${bidPackageId}/comparison`)
+export async function fetchComparison(
+  bidPackageId,
+  {
+    dealerPriceMode = {},
+    cellPriceMode = {},
+    excludedSpecItemIds = []
+  } = {}
+) {
+  const params = new URLSearchParams()
+
+  Object.entries(dealerPriceMode || {}).forEach(([inviteId, mode]) => {
+    if (mode === 'alt' || mode === 'bod') {
+      params.append(`price_mode[${inviteId}]`, mode)
+    }
+  })
+
+  Object.entries(cellPriceMode || {}).forEach(([compositeKey, mode]) => {
+    if (!(mode === 'alt' || mode === 'bod')) return
+    const [specItemId, inviteId] = String(compositeKey).split(':')
+    if (!specItemId || !inviteId) return
+    params.append(`cell_price_mode[${specItemId}][${inviteId}]`, mode)
+  })
+
+  ;(excludedSpecItemIds || []).forEach((specItemId) => {
+    if (specItemId != null && specItemId !== '') {
+      params.append('excluded_spec_item_ids[]', String(specItemId))
+    }
+  })
+
+  const query = params.toString()
+  return request(`/api/bid_packages/${bidPackageId}/comparison${query ? `?${query}` : ''}`)
+}
+
+export async function awardBidPackage({
+  bidPackageId,
+  bidId,
+  awardedBy,
+  awardedAmountSnapshot,
+  note,
+  cellPriceMode = {},
+  excludedSpecItemIds = []
+}) {
+  return request(`/api/bid_packages/${bidPackageId}/award`, {
+    method: 'POST',
+    body: JSON.stringify({
+      bid_id: bidId,
+      awarded_by: awardedBy,
+      awarded_amount_snapshot: awardedAmountSnapshot,
+      note,
+      cell_price_mode: cellPriceMode,
+      excluded_spec_item_ids: excludedSpecItemIds
+    })
+  })
+}
+
+export async function changeBidPackageAward({
+  bidPackageId,
+  bidId,
+  awardedBy,
+  awardedAmountSnapshot,
+  note,
+  cellPriceMode = {},
+  excludedSpecItemIds = []
+}) {
+  return request(`/api/bid_packages/${bidPackageId}/change_award`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      bid_id: bidId,
+      awarded_by: awardedBy,
+      awarded_amount_snapshot: awardedAmountSnapshot,
+      note,
+      cell_price_mode: cellPriceMode,
+      excluded_spec_item_ids: excludedSpecItemIds
+    })
+  })
+}
+
+export async function clearBidPackageAward({
+  bidPackageId,
+  awardedBy,
+  awardedAmountSnapshot,
+  note,
+  cellPriceMode = {},
+  excludedSpecItemIds = []
+}) {
+  return request(`/api/bid_packages/${bidPackageId}/clear_award`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      awarded_by: awardedBy,
+      awarded_amount_snapshot: awardedAmountSnapshot,
+      note,
+      cell_price_mode: cellPriceMode,
+      excluded_spec_item_ids: excludedSpecItemIds
+    })
+  })
 }
 
 export function comparisonExportUrl(
   bidPackageId,
   dealerPriceMode = {},
+  cellPriceMode = {},
   format = 'csv',
   excludedSpecItemIds = [],
   comparisonMode = 'average',
@@ -235,6 +356,12 @@ export function comparisonExportUrl(
     if (mode === 'alt' || mode === 'bod') {
       params.append(`price_mode[${inviteId}]`, mode)
     }
+  })
+  Object.entries(cellPriceMode || {}).forEach(([compositeKey, mode]) => {
+    if (!(mode === 'alt' || mode === 'bod')) return
+    const [specItemId, inviteId] = String(compositeKey).split(':')
+    if (!specItemId || !inviteId) return
+    params.append(`cell_price_mode[${specItemId}][${inviteId}]`, mode)
   })
   ;(excludedSpecItemIds || []).forEach((specItemId) => {
     if (specItemId != null && specItemId !== '') {
@@ -282,5 +409,28 @@ export async function submitDealerBid(token) {
   return request(`/api/invites/${token}/bid/submit`, {
     method: 'POST',
     body: JSON.stringify({})
+  })
+}
+
+export async function createDealerPostAwardUpload(token, { file, fileName, note, specItemId }) {
+  if (file) {
+    const formData = new FormData()
+    formData.append('file', file)
+    if (fileName) formData.append('file_name', fileName)
+    if (note) formData.append('note', note)
+    if (specItemId != null && specItemId !== '') formData.append('spec_item_id', String(specItemId))
+    return request(`/api/invites/${token}/post_award_uploads`, {
+      method: 'POST',
+      body: formData
+    })
+  }
+
+  return request(`/api/invites/${token}/post_award_uploads`, {
+    method: 'POST',
+    body: JSON.stringify({
+      file_name: fileName,
+      note,
+      spec_item_id: specItemId
+    })
   })
 }

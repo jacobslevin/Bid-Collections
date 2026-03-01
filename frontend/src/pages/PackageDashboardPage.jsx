@@ -1,17 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import SectionCard from '../components/SectionCard'
 import {
-  bulkDeleteInvites,
-  bulkDisableInvites,
-  bulkEnableInvites,
-  bulkReopenInvites,
+  API_BASE_URL,
+  approveSpecItemRequirement,
+  clearCurrentAwardApprovals,
+  clearBidPackageAward,
   createInvite,
   deactivateSpecItem,
-  reactivateSpecItem,
-  disableInvite,
-  deleteBidPackage,
   deleteInvite,
+  disableInvite,
   enableInvite,
+  reactivateSpecItem,
+  unapproveSpecItemRequirement,
+  deleteBidPackage,
   fetchBidPackageDashboard,
   fetchBidPackages,
   fetchInviteHistory,
@@ -29,16 +31,31 @@ const GENERAL_PRICING_FIELDS = [
   { key: 'contingency_amount', label: 'Contingency' },
   { key: 'sales_tax_amount', label: 'Sales Tax' }
 ]
+const DASHBOARD_SELECTED_PACKAGE_KEY = 'bid_collections.dashboard.selected_bid_package_id'
+const DASHBOARD_LOADED_PACKAGE_KEY = 'bid_collections.dashboard.loaded_bid_package_id'
+const DASHBOARD_LINE_ITEMS_VIEW_KEY_PREFIX = 'bid_collections.dashboard.line_items_view.'
 
 const usdFormatter = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2
 })
 
-function statusClass(status) {
-  if (status === 'submitted') return 'ok'
-  if (status === 'in_progress') return 'warn'
-  return 'muted'
+function awardStatusMeta(selectionStatus) {
+  if (selectionStatus === 'awarded') return { label: 'Awarded', toneClass: 'state-good' }
+  if (selectionStatus === 'not_selected') return { label: 'Lost', toneClass: 'state-bad' }
+  return null
+}
+
+function statusMeta(status) {
+  if (status === 'submitted') return { label: 'Submitted', toneClass: 'state-good' }
+  if (status === 'in_progress') return { label: 'In Progress', toneClass: 'state-warn' }
+  if (status === 'not_started') return { label: 'No Activity', toneClass: 'state-bad' }
+  return { label: 'No Activity', toneClass: 'state-bad' }
+}
+
+function accessMeta(accessState) {
+  if (accessState === 'disabled') return { label: 'Disabled', toneClass: 'state-bad' }
+  return { label: 'Enabled', toneClass: 'state-good' }
 }
 
 function formatTimestamp(value) {
@@ -46,6 +63,12 @@ function formatTimestamp(value) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString()
+}
+
+function vendorDisplayName(value) {
+  if (!value) return '—'
+  const parts = String(value).split(' - ')
+  return parts[0]?.trim() || String(value)
 }
 
 function numberOrNull(value) {
@@ -57,6 +80,32 @@ function numberOrNull(value) {
 function money(value) {
   const n = numberOrNull(value)
   return n == null ? '—' : `$${usdFormatter.format(n)}`
+}
+
+function compactMoney(value) {
+  const n = numberOrNull(value)
+  if (n == null) return '—'
+  const abs = Math.abs(n)
+  if (abs >= 1_000_000) return `$${(n / 1_000_000).toFixed(3)}MM`
+  if (abs >= 1_000) return `$${(n / 1_000).toFixed(3)}K`
+  return `$${n.toFixed(2)}`
+}
+
+function totalLabel(row, { postAwardActive = false } = {}) {
+  if (postAwardActive) {
+    const awardedSnapshot = numberOrNull(row?.awarded_amount_snapshot)
+    if (row?.selection_status === 'awarded' && awardedSnapshot != null) return money(awardedSnapshot)
+    return money(row?.latest_total_amount)
+  }
+
+  const minTotal = numberOrNull(row?.min_total_amount)
+  const maxTotal = numberOrNull(row?.max_total_amount)
+  if (minTotal != null && maxTotal != null) {
+    if (Math.abs(maxTotal - minTotal) < 0.005) return compactMoney(minTotal)
+    return `${compactMoney(minTotal)}-${compactMoney(maxTotal)}`
+  }
+
+  return compactMoney(row?.latest_total_amount)
 }
 
 function extendedAmount(unitPrice, quantity) {
@@ -74,36 +123,100 @@ function netUnitPrice(unitListPrice, discountPercent, tariffPercent) {
   return listPrice * (1 - (discount / 100)) * (1 + (tariff / 100))
 }
 
+function loadStoredValue(key) {
+  try {
+    return window.localStorage.getItem(key) || ''
+  } catch (_error) {
+    return ''
+  }
+}
+
+function storeValue(key, value) {
+  try {
+    if (value) window.localStorage.setItem(key, String(value))
+    else window.localStorage.removeItem(key)
+  } catch (_error) {
+    // no-op when localStorage is unavailable
+  }
+}
+
+function lineItemsViewStorageKey(bidPackageId) {
+  return `${DASHBOARD_LINE_ITEMS_VIEW_KEY_PREFIX}${bidPackageId}`
+}
+
+function loadLineItemsViewPreferences(bidPackageId) {
+  const defaults = { showProductColumn: true, showBrandColumn: true, showQtyColumn: true }
+  if (!bidPackageId) return defaults
+  try {
+    const raw = window.localStorage.getItem(lineItemsViewStorageKey(bidPackageId))
+    if (!raw) return defaults
+    const parsed = JSON.parse(raw)
+    return {
+      showProductColumn: typeof parsed?.showProductColumn === 'boolean' ? parsed.showProductColumn : defaults.showProductColumn,
+      showBrandColumn: typeof parsed?.showBrandColumn === 'boolean' ? parsed.showBrandColumn : defaults.showBrandColumn,
+      showQtyColumn: typeof parsed?.showQtyColumn === 'boolean' ? parsed.showQtyColumn : defaults.showQtyColumn
+    }
+  } catch (_error) {
+    return defaults
+  }
+}
+
+function storeLineItemsViewPreferences(bidPackageId, prefs) {
+  if (!bidPackageId) return
+  try {
+    window.localStorage.setItem(lineItemsViewStorageKey(bidPackageId), JSON.stringify({
+      showProductColumn: Boolean(prefs?.showProductColumn),
+      showBrandColumn: Boolean(prefs?.showBrandColumn),
+      showQtyColumn: Boolean(prefs?.showQtyColumn)
+    }))
+  } catch (_error) {
+    // no-op when localStorage is unavailable
+  }
+}
+
 export default function PackageDashboardPage() {
+  const navigate = useNavigate()
   const [bidPackages, setBidPackages] = useState([])
-  const [selectedBidPackageId, setSelectedBidPackageId] = useState('')
+  const [selectedBidPackageId, setSelectedBidPackageId] = useState(() => loadStoredValue(DASHBOARD_SELECTED_PACKAGE_KEY))
   const [loadedBidPackageId, setLoadedBidPackageId] = useState('')
+  const [restoredLoadedBidPackageId, setRestoredLoadedBidPackageId] = useState(() => loadStoredValue(DASHBOARD_LOADED_PACKAGE_KEY))
   const [rows, setRows] = useState([])
   const [specItems, setSpecItems] = useState([])
+  const [requiredApprovalColumns, setRequiredApprovalColumns] = useState([])
+  const [currentAwardedBidId, setCurrentAwardedBidId] = useState(null)
+  const [generalUploads, setGeneralUploads] = useState([])
   const [statusMessage, setStatusMessage] = useState('')
   const [loading, setLoading] = useState(false)
   const [loadingPackages, setLoadingPackages] = useState(false)
   const [copiedInviteId, setCopiedInviteId] = useState(null)
-  const [openActionMenuInviteId, setOpenActionMenuInviteId] = useState(null)
-  const [bulkActionsOpen, setBulkActionsOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyData, setHistoryData] = useState(null)
   const [expandedVersionId, setExpandedVersionId] = useState(null)
-  const [passwordDrafts, setPasswordDrafts] = useState({})
-  const [savingPasswordByInviteId, setSavingPasswordByInviteId] = useState({})
+  const [activeLineItemFilesModal, setActiveLineItemFilesModal] = useState(null)
+  const [editingPasswordInviteId, setEditingPasswordInviteId] = useState(null)
+  const [passwordEditDraft, setPasswordEditDraft] = useState('')
+  const [savingPasswordInviteId, setSavingPasswordInviteId] = useState(null)
   const [loadedPackageSettings, setLoadedPackageSettings] = useState(null)
   const [packageNameDraft, setPackageNameDraft] = useState('')
   const [visibilityDraft, setVisibilityDraft] = useState('private')
   const [instructionsDraft, setInstructionsDraft] = useState('')
   const [activeGeneralFieldsDraft, setActiveGeneralFieldsDraft] = useState(GENERAL_PRICING_FIELDS.map((field) => field.key))
   const [editingBidPackage, setEditingBidPackage] = useState(false)
+  const [showProductColumn, setShowProductColumn] = useState(true)
+  const [showBrandColumn, setShowBrandColumn] = useState(true)
+  const [showQtyColumn, setShowQtyColumn] = useState(true)
+  const [lineItemsSort, setLineItemsSort] = useState('code_tag')
+  const [lineItemsPendingSnapshot, setLineItemsPendingSnapshot] = useState({})
+  const [lineItemsPage, setLineItemsPage] = useState(1)
+  const [lineItemsPerPage, setLineItemsPerPage] = useState(50)
 
   const [dealerName, setDealerName] = useState('')
   const [dealerEmail, setDealerEmail] = useState('')
   const [selectedVendorKey, setSelectedVendorKey] = useState('')
   const [invitePassword, setInvitePassword] = useState('')
-  const [selectedInviteIds, setSelectedInviteIds] = useState([])
+  const [showAddBidderForm, setShowAddBidderForm] = useState(false)
+  const [showAllBidders, setShowAllBidders] = useState(false)
   const [copiedPublicUrl, setCopiedPublicUrl] = useState(false)
 
   const loadBidPackages = async (preserveSelectedId = true) => {
@@ -116,17 +229,29 @@ export default function PackageDashboardPage() {
       if (list.length === 0) {
         setSelectedBidPackageId('')
         setLoadedBidPackageId('')
+        setRestoredLoadedBidPackageId('')
         setRows([])
         setSpecItems([])
+        storeValue(DASHBOARD_SELECTED_PACKAGE_KEY, '')
+        storeValue(DASHBOARD_LOADED_PACKAGE_KEY, '')
         return
       }
 
+      const preferredId = selectedBidPackageId || loadStoredValue(DASHBOARD_SELECTED_PACKAGE_KEY)
+
       if (preserveSelectedId) {
-        const hasSelected = list.some((item) => String(item.id) === String(selectedBidPackageId))
-        if (hasSelected) return
+        const hasSelected = preferredId && list.some((item) => String(item.id) === String(preferredId))
+        if (hasSelected) {
+          if (String(selectedBidPackageId) !== String(preferredId)) {
+            setSelectedBidPackageId(String(preferredId))
+          }
+          return
+        }
       }
 
-      setSelectedBidPackageId(String(list[0].id))
+      const fallbackId = String(list[0].id)
+      setSelectedBidPackageId(fallbackId)
+      storeValue(DASHBOARD_SELECTED_PACKAGE_KEY, fallbackId)
     } catch (error) {
       setStatusMessage(error.message)
     } finally {
@@ -154,31 +279,37 @@ export default function PackageDashboardPage() {
     setStatusMessage('Loading bid package...')
     try {
       const data = await fetchBidPackageDashboard(selectedBidPackageId)
+      const viewPrefs = loadLineItemsViewPreferences(String(selectedBidPackageId))
       const invites = data.invites || []
       const activeSpecItems = data.spec_items || []
       const bidPackage = data.bid_package || null
       setRows(invites)
       setSpecItems(activeSpecItems)
-      setSelectedInviteIds([])
-      setBulkActionsOpen(false)
+      setLineItemsPage(1)
+      setRequiredApprovalColumns(data.required_approval_columns || [])
+      setCurrentAwardedBidId(data.current_awarded_bid_id ?? null)
+      setGeneralUploads(data.general_uploads || [])
       setLoadedPackageSettings(bidPackage)
       setPackageNameDraft(bidPackage?.name || '')
       setVisibilityDraft(bidPackage?.visibility || 'private')
       setInstructionsDraft(bidPackage?.instructions || '')
       setActiveGeneralFieldsDraft(bidPackage?.active_general_fields || GENERAL_PRICING_FIELDS.map((field) => field.key))
+      setShowProductColumn(viewPrefs.showProductColumn)
+      setShowBrandColumn(viewPrefs.showBrandColumn)
+      setShowQtyColumn(viewPrefs.showQtyColumn)
       if (closeEdit) setEditingBidPackage(false)
-      setPasswordDrafts(
-        invites.reduce((acc, invite) => {
-          acc[invite.invite_id] = invite.invite_password || ''
-          return acc
-        }, {})
-      )
       setLoadedBidPackageId(String(selectedBidPackageId))
+      storeValue(DASHBOARD_SELECTED_PACKAGE_KEY, String(selectedBidPackageId))
+      storeValue(DASHBOARD_LOADED_PACKAGE_KEY, String(selectedBidPackageId))
+      setRestoredLoadedBidPackageId(String(selectedBidPackageId))
       setStatusMessage('')
     } catch (error) {
       setStatusMessage(error.message)
       setRows([])
       setSpecItems([])
+      setRequiredApprovalColumns([])
+      setCurrentAwardedBidId(null)
+      setGeneralUploads([])
     } finally {
       setLoading(false)
     }
@@ -200,6 +331,7 @@ export default function PackageDashboardPage() {
       setDealerName('')
       setDealerEmail('')
       setInvitePassword('')
+      setShowAddBidderForm(false)
       setStatusMessage('Invite created. Reloading dashboard...')
       await loadDashboard()
     } catch (error) {
@@ -267,7 +399,7 @@ export default function PackageDashboardPage() {
     const absoluteUrl = `${window.location.origin}${row.invite_url}`
     const knownPassword = row.invite_password || ''
     if (!knownPassword) {
-      setStatusMessage('No password found for this invite. Use Edit Password first.')
+      setStatusMessage('No password found for this invite. Use the password edit icon first.')
       return
     }
     const passwordLine = `Password: ${knownPassword}`
@@ -288,17 +420,17 @@ export default function PackageDashboardPage() {
     window.location.href = mailto
   }
 
-  const editInvitePassword = async (row) => {
+  const editInvitePassword = async (row, nextPassword) => {
     if (!loadedBidPackageId) return
     const inviteId = row.invite_id
-    const newPassword = (passwordDrafts[inviteId] ?? '').trim()
+    const newPassword = String(nextPassword ?? '').trim()
     if (!newPassword) {
       setStatusMessage('Password cannot be blank.')
       return
     }
 
     setLoading(true)
-    setSavingPasswordByInviteId((prev) => ({ ...prev, [inviteId]: true }))
+    setSavingPasswordInviteId(inviteId)
     setStatusMessage('Updating password...')
     try {
       await updateInvitePassword({
@@ -312,11 +444,13 @@ export default function PackageDashboardPage() {
           invite.invite_id === inviteId ? { ...invite, invite_password: newPassword } : invite
         ))
       )
+      setEditingPasswordInviteId((prev) => (prev === inviteId ? null : prev))
+      setPasswordEditDraft('')
     } catch (error) {
       setStatusMessage(error.message)
     } finally {
       setLoading(false)
-      setSavingPasswordByInviteId((prev) => ({ ...prev, [inviteId]: false }))
+      setSavingPasswordInviteId(null)
     }
   }
 
@@ -466,18 +600,18 @@ export default function PackageDashboardPage() {
     }
   }
 
-  const removeInvite = async (row) => {
+  const approveRequirement = async (item, requirementKey) => {
     if (!loadedBidPackageId) return
-
-    const confirmed = window.confirm(`Delete invite for ${row.dealer_name}?\n\nThis will remove the invite and any associated bid data.`)
-    if (!confirmed) return
-
     setLoading(true)
-    setStatusMessage('Deleting invite...')
+    setStatusMessage('Saving approval...')
     try {
-      await deleteInvite({ bidPackageId: loadedBidPackageId, inviteId: row.invite_id })
-      setStatusMessage('Invite deleted.')
-      await loadDashboard()
+      await approveSpecItemRequirement({
+        bidPackageId: loadedBidPackageId,
+        specItemId: item.id,
+        requirementKey
+      })
+      setStatusMessage('Approval saved.')
+      await loadDashboard({ closeEdit: false })
     } catch (error) {
       setStatusMessage(error.message)
     } finally {
@@ -485,12 +619,51 @@ export default function PackageDashboardPage() {
     }
   }
 
-  const disableBidder = async (row) => {
+  const unapproveRequirement = async (item, requirementKey) => {
+    if (!loadedBidPackageId) return
+    setLoading(true)
+    setStatusMessage('Removing approval...')
+    try {
+      await unapproveSpecItemRequirement({
+        bidPackageId: loadedBidPackageId,
+        specItemId: item.id,
+        requirementKey
+      })
+      setStatusMessage('Approval removed.')
+      await loadDashboard({ closeEdit: false })
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const clearApprovalsForCurrentVendor = async () => {
+    if (!loadedBidPackageId || !postAwardActive) return
+    const confirmed = window.confirm(
+      'Clear all approval cells for the currently awarded vendor?\n\nThis will not affect approvals for other vendors.'
+    )
+    if (!confirmed) return
+
+    setLoading(true)
+    setStatusMessage('Clearing current vendor approvals...')
+    try {
+      const result = await clearCurrentAwardApprovals({ bidPackageId: loadedBidPackageId })
+      setStatusMessage(`Cleared ${result.deleted_count || 0} approvals for current vendor.`)
+      await loadDashboard({ closeEdit: false })
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const disableBidder = async (inviteId) => {
     if (!loadedBidPackageId) return
     setLoading(true)
     setStatusMessage('Disabling bidder...')
     try {
-      await disableInvite({ bidPackageId: loadedBidPackageId, inviteId: row.invite_id })
+      await disableInvite({ bidPackageId: loadedBidPackageId, inviteId })
       setStatusMessage('Bidder disabled.')
       await loadDashboard()
     } catch (error) {
@@ -500,12 +673,12 @@ export default function PackageDashboardPage() {
     }
   }
 
-  const enableBidder = async (row) => {
+  const enableBidder = async (inviteId) => {
     if (!loadedBidPackageId) return
     setLoading(true)
     setStatusMessage('Enabling bidder...')
     try {
-      await enableInvite({ bidPackageId: loadedBidPackageId, inviteId: row.invite_id })
+      await enableInvite({ bidPackageId: loadedBidPackageId, inviteId })
       setStatusMessage('Bidder enabled.')
       await loadDashboard()
     } catch (error) {
@@ -515,51 +688,18 @@ export default function PackageDashboardPage() {
     }
   }
 
-  const bulkDisableBidders = async () => {
-    if (!loadedBidPackageId || selectedInviteIds.length === 0) return
-    setLoading(true)
-    setStatusMessage('Disabling bidders...')
-    try {
-      await bulkDisableInvites({ bidPackageId: loadedBidPackageId, inviteIds: selectedInviteIds })
-      setStatusMessage('Bidders disabled.')
-      await loadDashboard()
-    } catch (error) {
-      setStatusMessage(error.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const bulkEnableBidders = async () => {
-    if (!loadedBidPackageId || selectedInviteIds.length === 0) return
-    setLoading(true)
-    setStatusMessage('Enabling bidders...')
-    try {
-      await bulkEnableInvites({ bidPackageId: loadedBidPackageId, inviteIds: selectedInviteIds })
-      setStatusMessage('Bidders enabled.')
-      await loadDashboard()
-    } catch (error) {
-      setStatusMessage(error.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const bulkReopenBids = async () => {
-    if (!loadedBidPackageId || selectedInviteIds.length === 0) return
-
+  const deleteBidderRow = async (row) => {
+    if (!loadedBidPackageId) return
     const confirmed = window.confirm(
-      `Reopen bids for ${selectedInviteIds.length} selected bidder(s)?\n\nOnly submitted bids will be reopened.`
+      `Delete ${row.dealer_name || 'this bidder'} and associated bid?\n\nThis action cannot be undone.`
     )
     if (!confirmed) return
 
     setLoading(true)
-    setStatusMessage('Reopening selected bids...')
+    setStatusMessage('Deleting bidder and bid...')
     try {
-      const result = await bulkReopenInvites({ bidPackageId: loadedBidPackageId, inviteIds: selectedInviteIds })
-      const reopenedCount = (result.reopened_ids || []).length
-      const skippedCount = (result.skipped_ids || []).length
-      setStatusMessage(`Reopened ${reopenedCount} bid(s).${skippedCount > 0 ? ` Skipped ${skippedCount} bid(s) that were not submitted.` : ''}`)
+      await deleteInvite({ bidPackageId: loadedBidPackageId, inviteId: row.invite_id })
+      setStatusMessage('Bidder and bid deleted.')
       await loadDashboard()
     } catch (error) {
       setStatusMessage(error.message)
@@ -568,20 +708,18 @@ export default function PackageDashboardPage() {
     }
   }
 
-  const bulkDeleteBidders = async () => {
-    if (!loadedBidPackageId || selectedInviteIds.length === 0) return
-
+  const clearAwardForPackage = async () => {
+    if (!loadedBidPackageId || !postAwardActive) return
     const confirmed = window.confirm(
-      `Delete ${selectedInviteIds.length} selected bidder(s) and associated bids?\n\nThis action cannot be undone.`
+      'Remove current award and return this package to bidding mode?'
     )
     if (!confirmed) return
 
     setLoading(true)
-    setStatusMessage('Deleting selected bidders...')
+    setStatusMessage('Removing award...')
     try {
-      const result = await bulkDeleteInvites({ bidPackageId: loadedBidPackageId, inviteIds: selectedInviteIds })
-      const deletedCount = (result.deleted_ids || []).length
-      setStatusMessage(`Deleted ${deletedCount} bidder(s) and associated bids.`)
+      await clearBidPackageAward({ bidPackageId: loadedBidPackageId })
+      setStatusMessage('Award removed.')
       await loadDashboard()
     } catch (error) {
       setStatusMessage(error.message)
@@ -591,31 +729,115 @@ export default function PackageDashboardPage() {
   }
 
   useEffect(() => {
-    const handleDocClick = (event) => {
-      if (event.target.closest('.invite-actions-menu-wrap')) return
-      setOpenActionMenuInviteId(null)
-      setBulkActionsOpen(false)
+    if (!selectedBidPackageId) return
+    storeValue(DASHBOARD_SELECTED_PACKAGE_KEY, selectedBidPackageId)
+  }, [selectedBidPackageId])
+
+  useEffect(() => {
+    if (!loadedBidPackageId) return
+    storeLineItemsViewPreferences(String(loadedBidPackageId), {
+      showProductColumn,
+      showBrandColumn,
+      showQtyColumn
+    })
+  }, [loadedBidPackageId, showProductColumn, showBrandColumn, showQtyColumn])
+
+  useEffect(() => {
+    if (!restoredLoadedBidPackageId) return
+    if (loadedBidPackageId) return
+    if (!selectedBidPackageId) return
+    if (String(selectedBidPackageId) !== String(restoredLoadedBidPackageId)) return
+    if (loadingPackages || loading) return
+
+    loadDashboard()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restoredLoadedBidPackageId, selectedBidPackageId, loadingPackages, loading])
+
+  const postAwardActive = Boolean(loadedPackageSettings?.awarded_bid_id)
+  const currentAwardedBidIdStr = loadedPackageSettings?.awarded_bid_id != null
+    ? String(loadedPackageSettings.awarded_bid_id)
+    : null
+  const visibleInviteRows = useMemo(() => {
+    if (!postAwardActive || showAllBidders || !currentAwardedBidIdStr) return rows
+    return rows.filter((row) => row.bid_id != null && String(row.bid_id) === currentAwardedBidIdStr)
+  }, [rows, postAwardActive, showAllBidders, currentAwardedBidIdStr])
+  const lineItemsActionColumnCount = postAwardActive ? 0 : 1
+  const lineItemsBaseColumnCount = 1 + (showProductColumn ? 1 : 0) + (showBrandColumn ? 1 : 0) + (showQtyColumn ? 1 : 0) + lineItemsActionColumnCount
+  const lineItemsExtraColumnCount = postAwardActive ? (requiredApprovalColumns.length + 1) : 0
+  const normalizedLineItemsPerPage = Number.isFinite(Number(lineItemsPerPage)) ? Number(lineItemsPerPage) : 50
+  const pendingApprovalsCount = (item) => (item.required_approvals || []).reduce((count, requirement) => (
+    requirement.applies && !requirement.approved ? count + 1 : count
+  ), 0)
+  const buildPendingSnapshot = (items) => (items || []).reduce((acc, item) => {
+    acc[item.id] = pendingApprovalsCount(item)
+    return acc
+  }, {})
+  const refreshLineItemsSort = () => setLineItemsPendingSnapshot(buildPendingSnapshot(specItems))
+  const sortedSpecItems = useMemo(() => {
+    const list = [...specItems]
+    const codeTagSort = (a, b) => String(a.code_tag || '').localeCompare(String(b.code_tag || ''), undefined, { numeric: true, sensitivity: 'base' })
+    const snapshotPendingFor = (item) => (
+      Object.prototype.hasOwnProperty.call(lineItemsPendingSnapshot, item.id)
+        ? lineItemsPendingSnapshot[item.id]
+        : pendingApprovalsCount(item)
+    )
+
+    if (!postAwardActive || lineItemsSort === 'code_tag') {
+      return list.sort(codeTagSort)
     }
-    document.addEventListener('click', handleDocClick)
-    return () => document.removeEventListener('click', handleDocClick)
-  }, [])
 
-  const allSelected = rows.length > 0 && selectedInviteIds.length === rows.length
-  const anySelected = selectedInviteIds.length > 0
+    if (lineItemsSort === 'pending_desc') {
+      return list.sort((a, b) => {
+        const cmp = snapshotPendingFor(b) - snapshotPendingFor(a)
+        return cmp !== 0 ? cmp : codeTagSort(a, b)
+      })
+    }
 
-  const toggleInviteSelected = (inviteId) => {
-    setSelectedInviteIds((prev) => (
-      prev.includes(inviteId)
-        ? prev.filter((id) => id !== inviteId)
-        : [...prev, inviteId]
-    ))
-  }
+    if (lineItemsSort === 'pending_asc') {
+      return list.sort((a, b) => {
+        const cmp = snapshotPendingFor(a) - snapshotPendingFor(b)
+        return cmp !== 0 ? cmp : codeTagSort(a, b)
+      })
+    }
 
-  const toggleAllSelected = () => {
-    setSelectedInviteIds((prev) => (
-      prev.length === rows.length ? [] : rows.map((row) => row.invite_id)
-    ))
-  }
+    return list.sort(codeTagSort)
+  }, [specItems, postAwardActive, lineItemsSort, lineItemsPendingSnapshot])
+  const totalLineItemsPages = Math.max(Math.ceil(sortedSpecItems.length / normalizedLineItemsPerPage), 1)
+  const lineItemsRangeStart = sortedSpecItems.length === 0 ? 0 : ((lineItemsPage - 1) * normalizedLineItemsPerPage) + 1
+  const lineItemsRangeEnd = Math.min(lineItemsPage * normalizedLineItemsPerPage, sortedSpecItems.length)
+  const lineItemsSectionTitle = loadedBidPackageId
+    ? `Line Items (${lineItemsRangeStart}-${lineItemsRangeEnd} of ${sortedSpecItems.length})`
+    : 'Line Items In Package'
+  const paginatedSpecItems = sortedSpecItems.slice(
+    (lineItemsPage - 1) * normalizedLineItemsPerPage,
+    lineItemsPage * normalizedLineItemsPerPage
+  )
+
+  useEffect(() => {
+    if (lineItemsPage > totalLineItemsPages) {
+      setLineItemsPage(totalLineItemsPages)
+    }
+    if (lineItemsPage < 1) {
+      setLineItemsPage(1)
+    }
+  }, [lineItemsPage, totalLineItemsPages])
+
+  useEffect(() => {
+    if (!postAwardActive) {
+      setShowAllBidders(false)
+      if (lineItemsSort !== 'code_tag') setLineItemsSort('code_tag')
+      if (Object.keys(lineItemsPendingSnapshot).length > 0) setLineItemsPendingSnapshot({})
+      return
+    }
+    if (showAddBidderForm) setShowAddBidderForm(false)
+  }, [postAwardActive, showAddBidderForm, lineItemsSort, lineItemsPendingSnapshot])
+
+  useEffect(() => {
+    if (!postAwardActive) return
+    if (lineItemsSort === 'code_tag') return
+    setLineItemsPendingSnapshot(buildPendingSnapshot(specItems))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadedBidPackageId, lineItemsSort])
 
   return (
     <div className="stack">
@@ -627,7 +849,11 @@ export default function PackageDashboardPage() {
             Bid Package
             <select
               value={selectedBidPackageId}
-              onChange={(event) => setSelectedBidPackageId(event.target.value)}
+              onChange={(event) => {
+                const nextId = event.target.value
+                setSelectedBidPackageId(nextId)
+                storeValue(DASHBOARD_SELECTED_PACKAGE_KEY, nextId)
+              }}
               disabled={loadingPackages}
             >
               {bidPackages.length === 0 ? <option value="">No bid packages yet</option> : null}
@@ -723,241 +949,641 @@ export default function PackageDashboardPage() {
                 Cancel
               </button>
             </div>
-
-            <SectionCard title="Line Items In Package">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Code/Tag</th>
-                    <th>Product</th>
-                    <th>Brand</th>
-                    <th>Qty/UOM</th>
-                    <th>Status</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {specItems.map((item) => (
-                    <tr key={item.id} className={!item.active ? 'spec-item-inactive-row' : ''}>
-                      <td>{item.code_tag || '—'}</td>
-                      <td>{item.product_name || '—'}</td>
-                      <td>{item.brand_name || '—'}</td>
-                      <td>{item.quantity || '—'} {item.uom || ''}</td>
-                      <td>{item.active ? 'Active' : 'Removed'}</td>
-                      <td>
-                        {item.active ? (
-                          <button className="btn btn-danger" onClick={() => removeSpecItem(item)} disabled={loading}>
-                            Deactivate
-                          </button>
-                        ) : (
-                          <button className="btn" onClick={() => reactivateItem(item)} disabled={loading}>
-                            Re-activate
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                  {specItems.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="text-muted">No line items in this package.</td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </SectionCard>
           </div>
         ) : null}
 
         {statusMessage ? <p className="text-muted">{statusMessage}</p> : null}
       </SectionCard>
 
-      <SectionCard title="Invite Bidders">
-        {loadedPackageLabel ? (
-          <p className="text-muted">Loaded bid package: {loadedPackageLabel}</p>
-        ) : (
-          <p className="text-muted">Load a bid package first, then add bidders.</p>
-        )}
-
-        <div className="invite-inline-row">
-          <label>
-            Vendor
-            <select value={selectedVendorKey} onChange={(event) => onVendorChange(event.target.value)}>
-              <option value="">Select vendor contact</option>
-              {vendorOptions.map((option) => (
-                <option key={option.key} value={option.key}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Password
-            <input type="text" value={invitePassword} onChange={(event) => setInvitePassword(event.target.value)} placeholder="Set invite password" />
-          </label>
-          <div className="invite-inline-action">
-            <button className="btn btn-primary" onClick={addInvite} disabled={loading || !dealerName.trim() || !invitePassword || !loadedBidPackageId}>
-              Add Bidder Invite
+      <SectionCard title="Bidders">
+        {postAwardActive ? (
+          <div className="action-row" style={{ marginBottom: '0.6rem', justifyContent: 'flex-end' }}>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => setShowAllBidders((prev) => !prev)}
+              disabled={loading || !currentAwardedBidIdStr}
+            >
+              {showAllBidders ? 'Show Winner Only' : 'Show All'}
             </button>
-          </div>
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Invites">
-        {anySelected ? (
-          <div className="action-row" style={{ marginBottom: '0.6rem' }}>
-            <span className="text-muted">{selectedInviteIds.length} selected</span>
-            <div className="invite-actions-menu-wrap">
-              <button
-                className="btn"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  setBulkActionsOpen((prev) => !prev)
-                }}
-                disabled={loading || !loadedBidPackageId}
-              >
-                Bulk Actions
-              </button>
-              {bulkActionsOpen ? (
-                <div className="invite-actions-menu">
-                  <button className="btn invite-actions-item" onClick={() => { bulkReopenBids(); setBulkActionsOpen(false) }}>
-                    Reopen Selected Bids
-                  </button>
-                  <button className="btn invite-actions-item" onClick={() => { bulkEnableBidders(); setBulkActionsOpen(false) }}>
-                    Enable Selected
-                  </button>
-                  <button className="btn invite-actions-item invite-actions-delete" onClick={() => { bulkDisableBidders(); setBulkActionsOpen(false) }}>
-                    Disable Selected
-                  </button>
-                  <button className="btn invite-actions-item invite-actions-delete" onClick={() => { bulkDeleteBidders(); setBulkActionsOpen(false) }}>
-                    Delete Selected Bidders &amp; Bids
-                  </button>
-                </div>
-              ) : null}
-            </div>
           </div>
         ) : null}
         <table className="table">
           <thead>
             <tr>
-              <th>
-                <input
-                  type="checkbox"
-                  checked={allSelected}
-                  onChange={toggleAllSelected}
-                  disabled={rows.length === 0}
-                  aria-label="Select all invites"
-                />
-              </th>
-              <th>Dealer</th>
-              <th>Email</th>
+              <th>Vendor</th>
               <th>Status</th>
-              <th>Access</th>
-              <th>Current Version</th>
-              <th>Last Saved</th>
-              <th>Submitted</th>
-              <th>Password</th>
-              <th>Actions</th>
+              <th>V / Saved-Submitted</th>
+              <th>Snapshot</th>
+              <th className="num">Total</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
+            {visibleInviteRows.map((row) => {
+              const awardMeta = awardStatusMeta(row.selection_status)
+              const rowStatusMeta = statusMeta(row.status)
+              const rowAccessMeta = accessMeta(row.access_state)
+              const primaryStatusMeta = postAwardActive
+                ? (awardMeta || { label: '—', toneClass: 'state-muted' })
+                : rowStatusMeta
+              return (
               <tr key={row.invite_id}>
                 <td>
-                  <input
-                    type="checkbox"
-                    checked={selectedInviteIds.includes(row.invite_id)}
-                    onChange={() => toggleInviteSelected(row.invite_id)}
-                    aria-label={`Select ${row.dealer_name}`}
-                  />
-                </td>
-                <td>{row.dealer_name}</td>
-                <td>{row.dealer_email || '—'}</td>
-                <td><span className={`pill ${statusClass(row.status)}`}>{row.status}</span></td>
-                <td><span className={`pill ${row.access_state === 'disabled' ? 'muted' : 'ok'}`}>{row.access_state || 'enabled'}</span></td>
-                <td>
-                  <div className="version-cell">
-                    <span>{row.current_version > 0 ? `v${row.current_version}` : '—'}</span>
-                    {row.can_reclose ? (
-                      <button className="btn version-action-btn" onClick={() => recloseBid(row)} disabled={loading}>
-                        Reclose &amp; Lock
-                      </button>
-                    ) : null}
+                  <div className="stack" style={{ gap: '0.2rem' }}>
+                    <span>{vendorDisplayName(row.dealer_name)}</span>
+                    <span className="text-muted bidder-password-inline">
+                      <span className="bidder-password-row">
+                        Password:
+                        {editingPasswordInviteId === row.invite_id ? (
+                          <input
+                            className="password-inline-input"
+                            type="text"
+                            value={passwordEditDraft}
+                            onChange={(event) => setPasswordEditDraft(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault()
+                                editInvitePassword(row, passwordEditDraft)
+                              } else if (event.key === 'Escape') {
+                                event.preventDefault()
+                                setEditingPasswordInviteId(null)
+                                setPasswordEditDraft('')
+                              }
+                            }}
+                            autoFocus
+                            disabled={savingPasswordInviteId === row.invite_id}
+                          />
+                        ) : (
+                          <>
+                            <span>{row.invite_password || '—'}</span>
+                            <button
+                              type="button"
+                              className="btn password-inline-edit-btn"
+                              onClick={() => {
+                                setEditingPasswordInviteId(row.invite_id)
+                                setPasswordEditDraft(row.invite_password || '')
+                              }}
+                              disabled={loading}
+                              title="Edit password"
+                              aria-label="Edit password"
+                            >
+                              ✎
+                            </button>
+                            <button
+                              type="button"
+                              className="btn password-inline-edit-btn"
+                              onClick={() => copyInviteLink(row)}
+                              disabled={loading}
+                              title="Copy invite link"
+                              aria-label="Copy invite link"
+                            >
+                              {copiedInviteId === row.invite_id ? '✓' : '⧉'}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn password-inline-edit-btn"
+                              onClick={() => emailInvite(row)}
+                              disabled={loading}
+                              title="Email invite"
+                              aria-label="Email invite"
+                            >
+                              ✉
+                            </button>
+                          </>
+                        )}
+                      </span>
+                    </span>
                   </div>
                 </td>
-                <td>{formatTimestamp(row.last_saved_at)}</td>
-                <td>{formatTimestamp(row.submitted_at)}</td>
                 <td>
-                  <input
-                    type="text"
-                    value={passwordDrafts[row.invite_id] ?? ''}
-                    onChange={(event) => {
-                      const value = event.target.value
-                      setPasswordDrafts((prev) => ({ ...prev, [row.invite_id]: value }))
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key !== 'Enter') return
-                      event.preventDefault()
-                      editInvitePassword(row)
-                    }}
-                    placeholder="Set password"
-                    disabled={Boolean(savingPasswordByInviteId[row.invite_id])}
-                  />
-                </td>
-                <td>
-                  <div className="invite-actions-menu-wrap">
-                    <button
-                      className="btn invite-actions-menu-trigger"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        setOpenActionMenuInviteId((prev) => (prev === row.invite_id ? null : row.invite_id))
-                      }}
-                    >
-                      ...
-                    </button>
-                    {openActionMenuInviteId === row.invite_id ? (
-                      <div className="invite-actions-menu">
-                        <button className="btn invite-actions-item" onClick={() => { openHistory(row.invite_id); setOpenActionMenuInviteId(null) }}>
-                          History
-                        </button>
-                        {row.status === 'submitted' ? (
-                          <button className="btn invite-actions-item" onClick={() => { reopenBid(row.invite_id); setOpenActionMenuInviteId(null) }}>
-                            Reopen
+                  <div className="bidder-state-cell">
+                    <div className="bidder-state-dots bidder-state-dots-labeled">
+                      <span className="state-dot-item" title={primaryStatusMeta.label}>
+                        <span className={`table-state-dot ${primaryStatusMeta.toneClass}`} aria-label={primaryStatusMeta.label} />
+                        <span className="state-dot-label">{primaryStatusMeta.label}</span>
+                        {postAwardActive && row.selection_status === 'awarded' ? (
+                          <button
+                            type="button"
+                            className="btn status-inline-action-btn"
+                            onClick={clearAwardForPackage}
+                            disabled={loading}
+                            title="Remove award"
+                            aria-label="Remove award"
+                          >
+                            ×
                           </button>
                         ) : null}
-                        {row.can_reclose ? (
-                          <button className="btn invite-actions-item" onClick={() => { recloseBid(row); setOpenActionMenuInviteId(null) }}>
-                            Reclose (Use v{row.current_version})
+                        {!postAwardActive && row.status === 'submitted' ? (
+                          <button
+                            type="button"
+                            className="btn status-inline-action-btn"
+                            onClick={() => reopenBid(row.invite_id)}
+                            disabled={loading}
+                            title="Reopen bid"
+                            aria-label="Reopen bid"
+                          >
+                            ↺
                           </button>
                         ) : null}
-                        <button className="btn invite-actions-item" onClick={() => { copyInviteLink(row); setOpenActionMenuInviteId(null) }}>
-                          {copiedInviteId === row.invite_id ? 'Copied' : 'Copy Invite Link'}
-                        </button>
-                        <button className="btn invite-actions-item" onClick={() => { emailInvite(row); setOpenActionMenuInviteId(null) }}>
-                          Email
-                        </button>
-                        {row.access_state === 'disabled' ? (
-                          <button className="btn invite-actions-item" onClick={() => { enableBidder(row); setOpenActionMenuInviteId(null) }}>
-                            Enable Bidder
+                        {!postAwardActive && row.status === 'in_progress' && row.can_reclose ? (
+                          <button
+                            type="button"
+                            className="btn status-inline-action-btn"
+                            onClick={() => recloseBid(row)}
+                            disabled={loading}
+                            title={`Reclose to submitted v${row.current_version || '—'}`}
+                            aria-label="Reclose bid"
+                          >
+                            🔒
+                          </button>
+                        ) : null}
+                      </span>
+                      <span className="state-dot-item" title={rowAccessMeta.label}>
+                        <span className={`table-state-dot ${rowAccessMeta.toneClass}`} aria-label={rowAccessMeta.label} />
+                        <span className="state-dot-label">{rowAccessMeta.label}</span>
+                        {row.access_state === 'enabled' ? (
+                          <button
+                            type="button"
+                            className="btn status-inline-action-btn"
+                            onClick={() => disableBidder(row.invite_id)}
+                            disabled={loading}
+                            title="Disable bidder access"
+                            aria-label="Disable bidder access"
+                          >
+                            ⛔
                           </button>
                         ) : (
-                          <button className="btn invite-actions-item invite-actions-delete" onClick={() => { disableBidder(row); setOpenActionMenuInviteId(null) }}>
-                            Disable Bidder
+                          <button
+                            type="button"
+                            className="btn status-inline-action-btn"
+                            onClick={() => enableBidder(row.invite_id)}
+                            disabled={loading}
+                            title="Enable bidder access"
+                            aria-label="Enable bidder access"
+                          >
+                            ✓
                           </button>
                         )}
-                        <button className="btn invite-actions-item invite-actions-delete" onClick={() => { removeInvite(row); setOpenActionMenuInviteId(null) }}>
-                          Delete Bidder &amp; Bid
-                        </button>
-                      </div>
-                    ) : null}
+                      </span>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <div className="version-cell bidder-version-cell">
+                    <span className="bidder-version-line">
+                      <span>{row.current_version > 0 ? `v${row.current_version}` : '—'}</span>
+                      <button
+                        type="button"
+                        className="btn status-inline-action-btn"
+                        onClick={() => openHistory(row.invite_id)}
+                        disabled={loading}
+                        title="View bid history"
+                        aria-label="View bid history"
+                      >
+                        🕘
+                      </button>
+                      <span>· {formatTimestamp(row.submitted_at || row.last_saved_at)}</span>
+                    </span>
+                  </div>
+                </td>
+                <td>
+                  <div className="bidder-state-cell">
+                    <div className="bidder-state-quoted">
+                      {`${row.quoted_count ?? 0}/${row.total_requested_count ?? 0} quoted (${row.bod_only_count ?? 0} BoD · ${row.mixed_line_count ?? 0} BoD+Sub · ${row.sub_only_count ?? 0} Sub)`}
+                    </div>
+                    <div className="bidder-state-pills">
+                      <span className={`completion-pill ${(row.completion_pct ?? 0) >= 100 ? 'complete' : 'incomplete'}`}>
+                        {`${Math.round(row.completion_pct ?? 0)}% complete`}
+                      </span>
+                      <span className="completion-pill warning">
+                        {`${Math.round(row.bod_skipped_pct ?? 0)}% BoD skipped`}
+                      </span>
+                    </div>
+                  </div>
+                </td>
+                <td className="num bidder-total-cell">
+                  <div className="bidder-total-wrap">
+                    <span>{totalLabel(row, { postAwardActive })}</span>
+                    <button
+                      type="button"
+                      className="btn bidder-total-delete-btn"
+                      onClick={() => deleteBidderRow(row)}
+                      disabled={loading}
+                      title="Delete bidder and bid"
+                      aria-label="Delete bidder and bid"
+                    >
+                      ×
+                    </button>
                   </div>
                 </td>
               </tr>
-            ))}
-            {rows.length === 0 ? (
+              )
+            })}
+            {visibleInviteRows.length === 0 ? (
               <tr>
-                <td colSpan={10} className="text-muted">No invite rows loaded yet.</td>
+                <td colSpan={5} className="text-muted">
+                  {postAwardActive && !showAllBidders ? 'No awarded bidder found.' : 'No invite rows loaded yet.'}
+                </td>
               </tr>
             ) : null}
           </tbody>
         </table>
+        <div className="action-row bidders-footer-actions">
+          <button
+            className="btn btn-primary dashboard-compare-btn"
+            type="button"
+            onClick={() => {
+              if (!loadedBidPackageId) return
+              navigate(`/comparison?bid_package_id=${encodeURIComponent(String(loadedBidPackageId))}`)
+            }}
+            disabled={!loadedBidPackageId || loading}
+          >
+            Compare
+          </button>
+          {!postAwardActive && !showAddBidderForm ? (
+            <button
+              className="btn"
+              onClick={() => setShowAddBidderForm(true)}
+              disabled={!loadedBidPackageId || loading}
+            >
+              + Bidder
+            </button>
+          ) : null}
+        </div>
+        {!postAwardActive && showAddBidderForm ? (
+          <div className="invite-inline-row" style={{ marginTop: '0.5rem', justifyContent: 'center' }}>
+            <label>
+              Vendor
+              <select value={selectedVendorKey} onChange={(event) => onVendorChange(event.target.value)}>
+                <option value="">Select vendor contact</option>
+                {vendorOptions.map((option) => (
+                  <option key={option.key} value={option.key}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Password
+              <input type="text" value={invitePassword} onChange={(event) => setInvitePassword(event.target.value)} placeholder="Set invite password" />
+            </label>
+            <div className="invite-inline-action">
+              <button className="btn btn-primary" onClick={addInvite} disabled={loading || !dealerName.trim() || !invitePassword || !loadedBidPackageId}>
+                Add Bidder
+              </button>
+              <button
+                className="btn"
+                type="button"
+                onClick={() => setShowAddBidderForm(false)}
+                disabled={loading}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </SectionCard>
+
+      <SectionCard
+        title={lineItemsSectionTitle}
+        actions={
+          <div className="action-row">
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={showProductColumn}
+                onChange={(event) => setShowProductColumn(event.target.checked)}
+              />
+              Product
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={showBrandColumn}
+                onChange={(event) => setShowBrandColumn(event.target.checked)}
+              />
+              Brand
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={showQtyColumn}
+                onChange={(event) => setShowQtyColumn(event.target.checked)}
+              />
+              Qty/UOM
+            </label>
+            {postAwardActive ? <span className="action-separator" aria-hidden="true">|</span> : null}
+            {postAwardActive ? (
+              <label>
+                Sort
+                <select
+                  value={lineItemsSort}
+                  onChange={(event) => {
+                    setLineItemsSort(event.target.value)
+                    setLineItemsPage(1)
+                  }}
+                >
+                  <option value="code_tag">Code/Tag</option>
+                  <option value="pending_desc">Needs Attention (Most Pending)</option>
+                  <option value="pending_asc">Most Approved (Least Pending)</option>
+                </select>
+              </label>
+            ) : null}
+            {postAwardActive && lineItemsSort !== 'code_tag' ? (
+              <button
+                type="button"
+                className="btn icon-btn-subtle"
+                onClick={refreshLineItemsSort}
+                disabled={loading}
+                title="Refresh sort order"
+                aria-label="Refresh sort order"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M20 4v6h-6" />
+                  <path d="M4 20v-6h6" />
+                  <path d="M20 10a8 8 0 0 0-14-4" />
+                  <path d="M4 14a8 8 0 0 0 14 4" />
+                </svg>
+              </button>
+            ) : null}
+            {postAwardActive ? <span className="action-separator" aria-hidden="true">|</span> : null}
+            {postAwardActive ? (
+              <button
+                type="button"
+                className="btn icon-btn-subtle"
+                onClick={clearApprovalsForCurrentVendor}
+                disabled={loading || !currentAwardedBidId}
+                title="Clear current vendor approvals"
+                aria-label="Clear current vendor approvals"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M7 16.5l6.2-6.2a2 2 0 0 1 2.8 0l1.7 1.7a2 2 0 0 1 0 2.8L12 20.5H7v-4z" />
+                  <path d="M14.5 9l1.7-1.7a2 2 0 0 1 2.8 0l.7.7a2 2 0 0 1 0 2.8L18 12.5" />
+                  <path d="M4 20.5h16" />
+                </svg>
+              </button>
+            ) : null}
+            {postAwardActive ? <span className="action-separator" aria-hidden="true">|</span> : null}
+            <label>
+              Rows per page
+              <select
+                value={lineItemsPerPage}
+                onChange={(event) => {
+                  const nextSize = Number(event.target.value)
+                  setLineItemsPerPage(nextSize)
+                  setLineItemsPage(1)
+                }}
+              >
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value={200}>200</option>
+              </select>
+            </label>
+          </div>
+        }
+      >
+        {!loadedBidPackageId ? (
+          <p className="text-muted">Load a bid package to view line items.</p>
+        ) : null}
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Code/Tag</th>
+              {showProductColumn ? <th>Product</th> : null}
+              {showBrandColumn ? <th>Brand</th> : null}
+              {showQtyColumn ? <th>Qty/UOM</th> : null}
+              {!postAwardActive ? <th>Actions</th> : null}
+              {postAwardActive ? requiredApprovalColumns.map((column) => (
+                <th key={`line-item-approval-head-${column.key}`}>{column.label}</th>
+              )) : null}
+              {postAwardActive ? <th>Files</th> : null}
+            </tr>
+          </thead>
+          <tbody>
+            {paginatedSpecItems.map((item) => {
+              const applicableApprovals = (item.required_approvals || []).filter((requirement) => requirement.applies)
+              const hasPendingApprovals = applicableApprovals.some((requirement) => !requirement.approved)
+              const allApprovalsComplete = applicableApprovals.length > 0 && !hasPendingApprovals
+              const codeTagStatusClass = postAwardActive
+                ? (allApprovalsComplete ? 'code-tag-approved' : 'code-tag-pending')
+                : ''
+
+              return (
+              <tr key={item.id} className={!item.active ? 'spec-item-inactive-row' : ''}>
+                <td>
+                  <span className={`code-tag-status ${codeTagStatusClass}`.trim()}>{item.code_tag || '—'}</span>
+                </td>
+                {showProductColumn ? <td>{item.product_name || '—'}</td> : null}
+                {showBrandColumn ? <td>{item.brand_name || '—'}</td> : null}
+                {showQtyColumn ? <td>{item.quantity || '—'} {item.uom || ''}</td> : null}
+                {!postAwardActive ? (
+                  <td>
+                    {item.active ? (
+                      <button
+                        type="button"
+                        className="btn btn-danger"
+                        onClick={() => removeSpecItem(item)}
+                        disabled={loading}
+                      >
+                        Deactivate
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => reactivateItem(item)}
+                        disabled={loading}
+                      >
+                        Re-activate
+                      </button>
+                    )}
+                  </td>
+                ) : null}
+                {postAwardActive ? (item.required_approvals || []).map((requirement) => {
+                  if (!requirement.applies) {
+                    return (
+                      <td key={`${item.id}-${requirement.key}`} className="approval-cell-na">
+                        N/A
+                      </td>
+                    )
+                  }
+
+                  if (requirement.approved) {
+                    return (
+                      <td key={`${item.id}-${requirement.key}`} className="approval-cell-approved">
+                        <div>Approved {formatTimestamp(requirement.approved_at)}</div>
+                        <button
+                          type="button"
+                          className="mini-link-btn"
+                          onClick={() => unapproveRequirement(item, requirement.key)}
+                          disabled={loading}
+                        >
+                          Unapprove
+                        </button>
+                      </td>
+                    )
+                  }
+
+                  return (
+                    <td key={`${item.id}-${requirement.key}`} className="approval-cell-pending">
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => approveRequirement(item, requirement.key)}
+                        disabled={loading}
+                      >
+                        Approve
+                      </button>
+                    </td>
+                  )
+                }) : null}
+                {postAwardActive ? (
+                  <td>
+                    {(item.uploads || []).length > 0 ? (
+                      <div className="action-row" style={{ gap: '0.4rem' }}>
+                        <span>{(item.uploads || []).length} file(s)</span>
+                        <button
+                          type="button"
+                          className="btn mini-link-btn"
+                          style={{ marginTop: 0 }}
+                          onClick={() => setActiveLineItemFilesModal({
+                            specItemId: item.id,
+                            codeTag: item.code_tag || '—',
+                            productName: item.product_name || '—',
+                            uploads: item.uploads || []
+                          })}
+                        >
+                          View
+                        </button>
+                      </div>
+                    ) : '—'}
+                  </td>
+                ) : null}
+              </tr>
+              )
+            })}
+            {sortedSpecItems.length === 0 ? (
+              <tr>
+                <td colSpan={lineItemsBaseColumnCount + lineItemsExtraColumnCount} className="text-muted">
+                  No line items in this package.
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+        {loadedBidPackageId ? (
+          <div className="action-row" style={{ justifyContent: 'center', marginTop: '0.55rem', alignItems: 'center' }}>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => setLineItemsPage((prev) => Math.max(prev - 1, 1))}
+              disabled={lineItemsPage <= 1}
+            >
+              Prev
+            </button>
+            <span className="text-muted">Page {lineItemsPage} / {totalLineItemsPages}</span>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => setLineItemsPage((prev) => Math.min(prev + 1, totalLineItemsPages))}
+              disabled={lineItemsPage >= totalLineItemsPages}
+            >
+              Next
+            </button>
+          </div>
+        ) : null}
+      </SectionCard>
+
+      {activeLineItemFilesModal ? (
+        <div className="modal-backdrop" onClick={() => setActiveLineItemFilesModal(null)}>
+          <div className="modal-card award-modal-card" onClick={(event) => event.stopPropagation()}>
+            <div className="section-head">
+              <h2>{`Files · ${activeLineItemFilesModal.codeTag}`}</h2>
+              <button className="btn" onClick={() => setActiveLineItemFilesModal(null)}>Close</button>
+            </div>
+            <p className="text-muted" style={{ marginTop: 0 }}>{activeLineItemFilesModal.productName}</p>
+            <table className="table dense">
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Uploaded By</th>
+                  <th>Uploaded At</th>
+                  <th>Download</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(activeLineItemFilesModal.uploads || []).map((upload) => (
+                  <tr key={`line-item-modal-upload-${upload.id}`}>
+                    <td>{upload.file_name || '—'}</td>
+                    <td>{upload.uploaded_by || upload.uploader_role || '—'}</td>
+                    <td>{formatTimestamp(upload.uploaded_at)}</td>
+                    <td>
+                      {upload.download_url ? (
+                        <a
+                          className="mini-link-btn"
+                          href={`${API_BASE_URL}${upload.download_url}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          download
+                        >
+                          Download
+                        </a>
+                      ) : (
+                        <span className="text-muted">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {(activeLineItemFilesModal.uploads || []).length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="text-muted">No files uploaded yet.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      <SectionCard title="Post-Award Workspace (Lite)">
+        {!loadedBidPackageId ? (
+          <p className="text-muted">Load a bid package to view post-award workspace details.</p>
+        ) : null}
+        {loadedBidPackageId && !postAwardActive ? (
+          <p className="text-muted">Workspace activates automatically after a vendor is awarded.</p>
+        ) : null}
+        {loadedBidPackageId && postAwardActive ? (
+          <div className="stack">
+            <div>
+              <h3 style={{ marginBottom: '0.35rem' }}>General Files (Vendor Uploads)</h3>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>File</th>
+                    <th>Note</th>
+                    <th>Uploaded By</th>
+                    <th>Uploaded At</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {generalUploads.map((upload) => (
+                    <tr key={`general-upload-${upload.id}`}>
+                      <td>{upload.file_name}</td>
+                      <td>{upload.note || '—'}</td>
+                      <td>{upload.uploaded_by || upload.uploader_role}</td>
+                      <td>{formatTimestamp(upload.uploaded_at)}</td>
+                    </tr>
+                  ))}
+                  {generalUploads.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="text-muted">No general files uploaded yet.</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-muted">Required approvals and per-line-item files are shown in the Line Items In Package table above.</p>
+          </div>
+        ) : null}
       </SectionCard>
 
       {historyOpen ? (
@@ -1052,6 +1678,7 @@ export default function PackageDashboardPage() {
           </div>
         </div>
       ) : null}
+
     </div>
   )
 }

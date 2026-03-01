@@ -1,9 +1,11 @@
 class Bid < ApplicationRecord
   belongs_to :invite
+  has_one :bid_package, through: :invite
   has_many :bid_line_items, dependent: :destroy
   has_many :bid_submission_versions, dependent: :destroy
 
   enum :state, { draft: 0, submitted: 1 }, default: :draft
+  enum :selection_status, { pending: 0, not_selected: 1, awarded: 2 }, default: :pending
 
   validates :state, presence: true
   validates :delivery_amount, :install_amount, :escalation_amount, :contingency_amount, :sales_tax_amount,
@@ -58,10 +60,24 @@ class Bid < ApplicationRecord
     total
   end
 
+  def latest_total_amount
+    latest_submitted_total = bid_submission_versions.order(version_number: :desc).limit(1).pick(:total_amount)
+    return latest_submitted_total.to_d if latest_submitted_total.present?
+
+    subtotal = bid_line_items.includes(:spec_item).sum do |line_item|
+      quantity = line_item.spec_item&.quantity
+      unit_net = line_item.unit_net_price
+      quantity && unit_net ? quantity * unit_net : 0
+    end
+
+    subtotal.to_d + active_general_pricing_total
+  end
+
   private
 
   def prevent_edit_after_submit
     return unless submitted? && state_in_database == 'submitted'
+    return if (changes_to_save.keys - %w[selection_status updated_at]).empty?
 
     errors.add(:base, 'Submitted bids are locked and cannot be edited')
     throw(:abort)

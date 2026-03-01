@@ -14,6 +14,13 @@ Rails.application.routes.draw do
       resources :bid_packages, only: [:index, :destroy, :update] do
         member do
           post :import_rows
+          post :award
+          patch :change_award
+          patch :clear_award
+          patch :clear_current_award_approvals
+          get 'post_award_uploads/:upload_id/download', to: 'bid_packages#download_post_award_upload'
+          patch 'spec_items/:spec_item_id/requirements/:requirement_key/approve', to: 'bid_packages#approve_spec_item_requirement'
+          patch 'spec_items/:spec_item_id/requirements/:requirement_key/unapprove', to: 'bid_packages#unapprove_spec_item_requirement'
           patch 'spec_items/:spec_item_id/deactivate', to: 'bid_packages#deactivate_spec_item'
           patch 'spec_items/:spec_item_id/reactivate', to: 'bid_packages#reactivate_spec_item'
         end
@@ -52,6 +59,8 @@ Rails.application.routes.draw do
       get 'invites/:token/bid', to: 'bids#show'
       put 'invites/:token/bid', to: 'bids#update'
       post 'invites/:token/bid/submit', to: 'bids#submit'
+      post 'invites/:token/post_award_uploads', to: 'bids#create_post_award_upload'
+      get 'invites/:token/post_award_uploads/:upload_id/download', to: 'bids#download_post_award_upload'
     end
   end
 end

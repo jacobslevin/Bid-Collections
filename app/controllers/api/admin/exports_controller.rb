@@ -4,6 +4,7 @@ module Api
       def show
         bid_package = BidPackage.find(params[:bid_package_id])
         price_modes = params[:price_mode].is_a?(ActionController::Parameters) ? params[:price_mode].to_unsafe_h : {}
+        cell_price_modes = params[:cell_price_mode].is_a?(ActionController::Parameters) ? params[:cell_price_mode].to_unsafe_h : {}
         excluded_spec_item_ids = Array(params[:excluded_spec_item_ids]).map(&:to_i).uniq
         requested_format = params[:format].to_s.downcase
         comparison_mode = params[:comparison_mode].to_s.presence || 'average'
@@ -16,6 +17,7 @@ module Api
           xlsx_output = Exports::BidPackageComparisonXlsxService.new(
             bid_package: bid_package,
             price_modes: price_modes,
+            cell_price_modes: cell_price_modes,
             excluded_spec_item_ids: excluded_spec_item_ids,
             comparison_mode: comparison_mode,
             show_product: show_product,
@@ -30,6 +32,7 @@ module Api
           csv_output = Exports::BidPackageComparisonCsvService.new(
             bid_package: bid_package,
             price_modes: price_modes,
+            cell_price_modes: cell_price_modes,
             excluded_spec_item_ids: excluded_spec_item_ids,
             comparison_mode: comparison_mode,
             show_product: show_product,
