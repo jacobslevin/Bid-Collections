@@ -107,13 +107,20 @@ module Api
               required_approvals: all_requirement_columns.map do |req|
                 applies = item_requirement_keys.include?(req[:key])
                 approval = approvals_by_key[req[:key]]
+                status = if applies
+                  approval&.status || 'pending'
+                else
+                  'pending'
+                end
                 {
                   key: req[:key],
                   label: req[:label],
                   applies: applies,
-                  approved: applies && approval.present?,
+                  status: status,
+                  approved: applies && status == 'approved',
                   approved_at: approval&.approved_at,
-                  approved_by: approval&.approved_by
+                  approved_by: approval&.approved_by,
+                  needs_fix_dates: approval&.needs_fix_dates_array || []
                 }
               end,
               uploads: uploads.map do |upload|
@@ -122,8 +129,10 @@ module Api
                   file_name: upload.file_name,
                   download_url: upload.file_available? ? "/api/bid_packages/#{bid_package.id}/post_award_uploads/#{upload.id}/download" : nil,
                   note: upload.note,
+                  requirement_key: upload.requirement_key,
+                  byte_size: upload.byte_size,
                   uploader_role: upload.uploader_role,
-                  uploaded_by: upload.invite&.dealer_name || upload.uploader_role,
+                  uploaded_by: upload.invite&.dealer_name || upload.uploader_role.to_s.titleize,
                   uploaded_at: upload.created_at
                 }
               end
@@ -139,8 +148,10 @@ module Api
               file_name: upload.file_name,
               download_url: upload.file_available? ? "/api/bid_packages/#{bid_package.id}/post_award_uploads/#{upload.id}/download" : nil,
               note: upload.note,
+              requirement_key: upload.requirement_key,
+              byte_size: upload.byte_size,
               uploader_role: upload.uploader_role,
-              uploaded_by: upload.invite&.dealer_name || upload.uploader_role,
+              uploaded_by: upload.invite&.dealer_name || upload.uploader_role.to_s.titleize,
               uploaded_at: upload.created_at
             }
           end,

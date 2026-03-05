@@ -1,10 +1,11 @@
 module Comparison
   class BidPackageComparisonService
-    def initialize(bid_package:, price_modes: {}, cell_price_modes: {}, excluded_spec_item_ids: [])
+    def initialize(bid_package:, price_modes: {}, cell_price_modes: {}, excluded_spec_item_ids: [], include_inactive: false)
       @bid_package = bid_package
       @price_modes = price_modes || {}
       @cell_price_modes = cell_price_modes || {}
       @excluded_spec_item_ids = Array(excluded_spec_item_ids).map(&:to_i).uniq
+      @include_inactive = include_inactive
     end
 
     def call
@@ -24,10 +25,13 @@ module Comparison
         }
       end
 
-      rows = @bid_package.spec_items.active
-                         .where.not(id: @excluded_spec_item_ids)
-                         .order(:id)
-                         .map do |spec_item|
+      spec_items_scope = @bid_package.spec_items
+      spec_items_scope = spec_items_scope.active unless @include_inactive
+
+      rows = spec_items_scope
+             .where.not(id: @excluded_spec_item_ids)
+             .order(:id)
+             .map do |spec_item|
         line_prices = submitted_bids.filter_map do |bid|
           selected_line_item_for_spec_item(
             bid,
@@ -67,6 +71,7 @@ module Comparison
 
         {
           spec_item_id: spec_item.id,
+          active: spec_item.active?,
           source_spec_item_id: spec_item.spec_item_id,
           image_url: spec_item.image_url,
           source_url: spec_item.source_url,

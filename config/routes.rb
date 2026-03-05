@@ -19,7 +19,12 @@ Rails.application.routes.draw do
           patch :clear_award
           patch :clear_current_award_approvals
           get 'post_award_uploads/:upload_id/download', to: 'bid_packages#download_post_award_upload'
+          get 'post_award_uploads/download_all', to: 'bid_packages#download_post_award_uploads_bundle'
+          post :post_award_uploads, to: 'bid_packages#create_post_award_upload'
+          patch 'post_award_uploads/:upload_id', to: 'bid_packages#update_post_award_upload'
+          delete 'post_award_uploads/:upload_id', to: 'bid_packages#delete_post_award_upload'
           patch 'spec_items/:spec_item_id/requirements/:requirement_key/approve', to: 'bid_packages#approve_spec_item_requirement'
+          patch 'spec_items/:spec_item_id/requirements/:requirement_key/needs_fix', to: 'bid_packages#mark_spec_item_requirement_needs_fix'
           patch 'spec_items/:spec_item_id/requirements/:requirement_key/unapprove', to: 'bid_packages#unapprove_spec_item_requirement'
           patch 'spec_items/:spec_item_id/deactivate', to: 'bid_packages#deactivate_spec_item'
           patch 'spec_items/:spec_item_id/reactivate', to: 'bid_packages#reactivate_spec_item'

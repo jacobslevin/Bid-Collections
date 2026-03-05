@@ -1,16 +1,27 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import SectionCard from '../components/SectionCard'
+import ComparisonPage from './ComparisonPage'
+import lockIcon from '../assets/bidders-icons/lock.svg'
+import linkIcon from '../assets/bidders-icons/link.svg'
+import emailIcon from '../assets/bidders-icons/email.svg'
+import reopenIcon from '../assets/bidders-icons/reopen.svg'
+import plusBidderIcon from '../assets/bidders-icons/plus-bidder.svg'
 import {
   API_BASE_URL,
   approveSpecItemRequirement,
   clearCurrentAwardApprovals,
   clearBidPackageAward,
   createInvite,
+  createBidPackagePostAwardUpload,
+  bidPackagePostAwardUploadsBundleUrl,
+  deleteBidPackagePostAwardUpload,
+  updateBidPackagePostAwardUpload,
   deactivateSpecItem,
   deleteInvite,
   disableInvite,
   enableInvite,
+  markSpecItemRequirementNeedsFix,
   reactivateSpecItem,
   unapproveSpecItemRequirement,
   deleteBidPackage,
@@ -31,9 +42,17 @@ const GENERAL_PRICING_FIELDS = [
   { key: 'contingency_amount', label: 'Contingency' },
   { key: 'sales_tax_amount', label: 'Sales Tax' }
 ]
+const EDIT_GENERAL_FIELD_ORDER = [
+  'sales_tax_amount',
+  'delivery_amount',
+  'install_amount',
+  'escalation_amount',
+  'contingency_amount'
+]
 const DASHBOARD_SELECTED_PACKAGE_KEY = 'bid_collections.dashboard.selected_bid_package_id'
 const DASHBOARD_LOADED_PACKAGE_KEY = 'bid_collections.dashboard.loaded_bid_package_id'
 const DASHBOARD_LINE_ITEMS_VIEW_KEY_PREFIX = 'bid_collections.dashboard.line_items_view.'
+const DASHBOARD_SKIP_TO_APPROVALS_KEY_PREFIX = 'bid_collections.dashboard.skip_to_approvals.'
 
 const usdFormatter = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 2,
@@ -65,6 +84,81 @@ function formatTimestamp(value) {
   return date.toLocaleString()
 }
 
+function formatShortDate(value) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleDateString()
+}
+
+function formatCompactDateTime(value) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const day = date.toLocaleDateString('en-CA')
+  const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase()
+  return `${day} ${time}`
+}
+
+function formatHistoryDateTime(value) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  })
+}
+
+function compactHistoryMoney(value) {
+  const n = numberOrNull(value)
+  if (n == null) return '—'
+  const abs = Math.abs(n)
+  if (abs >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}MM`
+  if (abs >= 1_000) return `$${(n / 1_000).toFixed(1)}K`
+  return `$${n.toFixed(2)}`
+}
+
+function formatFileSize(bytes) {
+  const n = Number(bytes)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  if (n >= 1024) return `${Math.round(n / 1024)} KB`
+  return `${n} B`
+}
+
+function normalizeFileToken(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
+function buildDownloadFileName({ codeTag, fileName, requirementLabel, includeRequirementTag, includeCodeTag }) {
+  const base = String(fileName || 'download')
+  const normalizedCode = includeCodeTag ? normalizeFileToken(codeTag) : ''
+  const normalizedRequirement = includeRequirementTag ? normalizeFileToken(requirementLabel) : ''
+  const dotIndex = base.lastIndexOf('.')
+  const name = dotIndex > 0 ? base.slice(0, dotIndex) : base
+  const ext = dotIndex > 0 ? base.slice(dotIndex) : ''
+  const parts = [normalizedCode, normalizedRequirement, name].filter(Boolean)
+  if (parts.length === 0) return base
+  return `${parts.join('_')}${ext}`
+}
+
+function fileNameWithRequirementTag(fileName, requirementLabel, codeTag, includeRequirementTag, includeCodeTag) {
+  return buildDownloadFileName({
+    codeTag,
+    fileName,
+    requirementLabel,
+    includeRequirementTag,
+    includeCodeTag
+  })
+}
+
 function vendorDisplayName(value) {
   if (!value) return '—'
   const parts = String(value).split(' - ')
@@ -86,8 +180,8 @@ function compactMoney(value) {
   const n = numberOrNull(value)
   if (n == null) return '—'
   const abs = Math.abs(n)
-  if (abs >= 1_000_000) return `$${(n / 1_000_000).toFixed(3)}MM`
-  if (abs >= 1_000) return `$${(n / 1_000).toFixed(3)}K`
+  if (abs >= 1_000_000) return `$${Number((n / 1_000_000).toFixed(1))}MM`
+  if (abs >= 1_000) return `$${Number((n / 1_000).toFixed(1))}K`
   return `$${n.toFixed(2)}`
 }
 
@@ -101,26 +195,13 @@ function totalLabel(row, { postAwardActive = false } = {}) {
   const minTotal = numberOrNull(row?.min_total_amount)
   const maxTotal = numberOrNull(row?.max_total_amount)
   if (minTotal != null && maxTotal != null) {
-    if (Math.abs(maxTotal - minTotal) < 0.005) return compactMoney(minTotal)
-    return `${compactMoney(minTotal)}-${compactMoney(maxTotal)}`
+    const minLabel = compactMoney(minTotal)
+    const maxLabel = compactMoney(maxTotal)
+    if (Math.abs(maxTotal - minTotal) < 0.005 || minLabel === maxLabel) return minLabel
+    return `${minLabel}-${maxLabel}`
   }
 
   return compactMoney(row?.latest_total_amount)
-}
-
-function extendedAmount(unitPrice, quantity) {
-  const p = numberOrNull(unitPrice)
-  const q = numberOrNull(quantity)
-  if (p == null || q == null) return null
-  return p * q
-}
-
-function netUnitPrice(unitListPrice, discountPercent, tariffPercent) {
-  const listPrice = numberOrNull(unitListPrice)
-  if (listPrice == null) return null
-  const discount = numberOrNull(discountPercent) ?? 0
-  const tariff = numberOrNull(tariffPercent) ?? 0
-  return listPrice * (1 - (discount / 100)) * (1 + (tariff / 100))
 }
 
 function loadStoredValue(key) {
@@ -142,6 +223,10 @@ function storeValue(key, value) {
 
 function lineItemsViewStorageKey(bidPackageId) {
   return `${DASHBOARD_LINE_ITEMS_VIEW_KEY_PREFIX}${bidPackageId}`
+}
+
+function approvalsOnlyStorageKey(bidPackageId) {
+  return `${DASHBOARD_SKIP_TO_APPROVALS_KEY_PREFIX}${bidPackageId}`
 }
 
 function loadLineItemsViewPreferences(bidPackageId) {
@@ -176,8 +261,12 @@ function storeLineItemsViewPreferences(bidPackageId, prefs) {
 
 export default function PackageDashboardPage() {
   const navigate = useNavigate()
+  const { bidPackageId: routeBidPackageId = '' } = useParams()
+  const normalizedRouteBidPackageId = routeBidPackageId ? String(routeBidPackageId) : ''
   const [bidPackages, setBidPackages] = useState([])
-  const [selectedBidPackageId, setSelectedBidPackageId] = useState(() => loadStoredValue(DASHBOARD_SELECTED_PACKAGE_KEY))
+  const [selectedBidPackageId, setSelectedBidPackageId] = useState(() => (
+    normalizedRouteBidPackageId || loadStoredValue(DASHBOARD_SELECTED_PACKAGE_KEY)
+  ))
   const [loadedBidPackageId, setLoadedBidPackageId] = useState('')
   const [restoredLoadedBidPackageId, setRestoredLoadedBidPackageId] = useState(() => loadStoredValue(DASHBOARD_LOADED_PACKAGE_KEY))
   const [rows, setRows] = useState([])
@@ -192,8 +281,17 @@ export default function PackageDashboardPage() {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyData, setHistoryData] = useState(null)
-  const [expandedVersionId, setExpandedVersionId] = useState(null)
+  const [historyView, setHistoryView] = useState(null)
+  const [historyInviteId, setHistoryInviteId] = useState(null)
   const [activeLineItemFilesModal, setActiveLineItemFilesModal] = useState(null)
+  const [lineItemUploadFile, setLineItemUploadFile] = useState(null)
+  const [lineItemUploadRequirementKey, setLineItemUploadRequirementKey] = useState('')
+  const [lineItemFilterRequirementKey, setLineItemFilterRequirementKey] = useState('all')
+  const [lineItemDownloadIncludeTag, setLineItemDownloadIncludeTag] = useState(false)
+  const [lineItemDownloadIncludeCode, setLineItemDownloadIncludeCode] = useState(false)
+  const [lineItemBulkDownloading, setLineItemBulkDownloading] = useState(false)
+  const [lineItemSavingTagUploadId, setLineItemSavingTagUploadId] = useState(null)
+  const [clearAwardModal, setClearAwardModal] = useState(null)
   const [editingPasswordInviteId, setEditingPasswordInviteId] = useState(null)
   const [passwordEditDraft, setPasswordEditDraft] = useState('')
   const [savingPasswordInviteId, setSavingPasswordInviteId] = useState(null)
@@ -210,13 +308,16 @@ export default function PackageDashboardPage() {
   const [lineItemsPendingSnapshot, setLineItemsPendingSnapshot] = useState({})
   const [lineItemsPage, setLineItemsPage] = useState(1)
   const [lineItemsPerPage, setLineItemsPerPage] = useState(50)
+  const [comparisonVisibleInviteIds, setComparisonVisibleInviteIds] = useState([])
+  const [biddersSort, setBiddersSort] = useState('created')
+  const [showAllAwardedBidders, setShowAllAwardedBidders] = useState(false)
+  const [approvalsOnlyMode, setApprovalsOnlyMode] = useState(false)
 
   const [dealerName, setDealerName] = useState('')
   const [dealerEmail, setDealerEmail] = useState('')
   const [selectedVendorKey, setSelectedVendorKey] = useState('')
   const [invitePassword, setInvitePassword] = useState('')
   const [showAddBidderForm, setShowAddBidderForm] = useState(false)
-  const [showAllBidders, setShowAllBidders] = useState(false)
   const [copiedPublicUrl, setCopiedPublicUrl] = useState(false)
 
   const loadBidPackages = async (preserveSelectedId = true) => {
@@ -237,7 +338,10 @@ export default function PackageDashboardPage() {
         return
       }
 
-      const preferredId = selectedBidPackageId || loadStoredValue(DASHBOARD_SELECTED_PACKAGE_KEY)
+      const preferredId = normalizedRouteBidPackageId || selectedBidPackageId || loadStoredValue(DASHBOARD_SELECTED_PACKAGE_KEY)
+      const routePackageExists = normalizedRouteBidPackageId
+        ? list.some((item) => String(item.id) === String(normalizedRouteBidPackageId))
+        : false
 
       if (preserveSelectedId) {
         const hasSelected = preferredId && list.some((item) => String(item.id) === String(preferredId))
@@ -247,6 +351,12 @@ export default function PackageDashboardPage() {
           }
           return
         }
+      }
+
+      if (normalizedRouteBidPackageId && !routePackageExists) {
+        setStatusMessage('Bid package not found.')
+        navigate('/package', { replace: true })
+        return
       }
 
       const fallbackId = String(list[0].id)
@@ -263,6 +373,17 @@ export default function PackageDashboardPage() {
     loadBidPackages(false)
   }, [])
 
+  useEffect(() => {
+    if (!normalizedRouteBidPackageId) return
+    if (String(selectedBidPackageId) !== normalizedRouteBidPackageId) {
+      setSelectedBidPackageId(normalizedRouteBidPackageId)
+    }
+    if (loading) return
+    if (String(loadedBidPackageId) === normalizedRouteBidPackageId) return
+    loadDashboard({ bidPackageId: normalizedRouteBidPackageId })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [normalizedRouteBidPackageId, loadedBidPackageId, selectedBidPackageId, loading])
+
   const loadedPackageLabel = useMemo(() => {
     if (!loadedBidPackageId) return ''
     const match = bidPackages.find((item) => String(item.id) === String(loadedBidPackageId))
@@ -271,15 +392,25 @@ export default function PackageDashboardPage() {
     const projectId = match.project_id ?? '—'
     return `${match.name} in ${projectName} (Bid Package ID: ${match.id}, Project ID: ${projectId})`
   }, [bidPackages, loadedBidPackageId])
+  const loadedPackageRecord = useMemo(
+    () => bidPackages.find((item) => String(item.id) === String(loadedBidPackageId)) || null,
+    [bidPackages, loadedBidPackageId]
+  )
+  const packageHeaderTitle = useMemo(() => {
+    const packageName = loadedPackageRecord?.name || loadedPackageSettings?.name || ''
+    if (packageName) return packageName
+    return loadedPackageLabel || 'Bid Package'
+  }, [loadedPackageLabel, loadedPackageRecord, loadedPackageSettings])
 
-  const loadDashboard = async ({ closeEdit = true } = {}) => {
-    if (!selectedBidPackageId) return
+  const loadDashboard = async ({ closeEdit = true, bidPackageId = '' } = {}) => {
+    const targetBidPackageId = String(bidPackageId || selectedBidPackageId || '')
+    if (!targetBidPackageId) return
 
     setLoading(true)
     setStatusMessage('Loading bid package...')
     try {
-      const data = await fetchBidPackageDashboard(selectedBidPackageId)
-      const viewPrefs = loadLineItemsViewPreferences(String(selectedBidPackageId))
+      const data = await fetchBidPackageDashboard(targetBidPackageId)
+      const viewPrefs = loadLineItemsViewPreferences(targetBidPackageId)
       const invites = data.invites || []
       const activeSpecItems = data.spec_items || []
       const bidPackage = data.bid_package || null
@@ -298,10 +429,16 @@ export default function PackageDashboardPage() {
       setShowBrandColumn(viewPrefs.showBrandColumn)
       setShowQtyColumn(viewPrefs.showQtyColumn)
       if (closeEdit) setEditingBidPackage(false)
-      setLoadedBidPackageId(String(selectedBidPackageId))
-      storeValue(DASHBOARD_SELECTED_PACKAGE_KEY, String(selectedBidPackageId))
-      storeValue(DASHBOARD_LOADED_PACKAGE_KEY, String(selectedBidPackageId))
-      setRestoredLoadedBidPackageId(String(selectedBidPackageId))
+      setSelectedBidPackageId(targetBidPackageId)
+      setLoadedBidPackageId(targetBidPackageId)
+      storeValue(DASHBOARD_SELECTED_PACKAGE_KEY, targetBidPackageId)
+      storeValue(DASHBOARD_LOADED_PACKAGE_KEY, targetBidPackageId)
+      setRestoredLoadedBidPackageId(targetBidPackageId)
+      setShowAllAwardedBidders(false)
+      setHistoryView(null)
+      setHistoryInviteId(null)
+      const isApprovalsOnlyStored = loadStoredValue(approvalsOnlyStorageKey(targetBidPackageId)) === '1'
+      setApprovalsOnlyMode(!bidPackage?.awarded_bid_id && isApprovalsOnlyStored)
       setStatusMessage('')
     } catch (error) {
       setStatusMessage(error.message)
@@ -316,15 +453,23 @@ export default function PackageDashboardPage() {
   }
 
   const addInvite = async () => {
-    if (!loadedBidPackageId || !dealerName.trim() || !invitePassword) return
+    const trimmedName = dealerName.trim()
+    const trimmedEmail = dealerEmail.trim()
+    const fallbackName = trimmedEmail ? trimmedEmail.split('@')[0] : ''
+    const resolvedDealerName = trimmedName || fallbackName
+    if (!loadedBidPackageId || !resolvedDealerName || !invitePassword) return
 
     setLoading(true)
     setStatusMessage('Creating invite...')
     try {
+      if (loadedBidPackageId) {
+        storeValue(approvalsOnlyStorageKey(loadedBidPackageId), '')
+      }
+      setApprovalsOnlyMode(false)
       const created = await createInvite({
         bidPackageId: loadedBidPackageId,
-        dealerName: dealerName.trim(),
-        dealerEmail: dealerEmail.trim(),
+        dealerName: resolvedDealerName,
+        dealerEmail: trimmedEmail,
         password: invitePassword
       })
       setSelectedVendorKey('')
@@ -456,11 +601,15 @@ export default function PackageDashboardPage() {
 
   const openHistory = async (inviteId) => {
     if (!loadedBidPackageId) return
+    if (historyOpen && String(historyInviteId) === String(inviteId)) {
+      setHistoryOpen(false)
+      return
+    }
 
+    setHistoryInviteId(inviteId)
     setHistoryOpen(true)
     setHistoryLoading(true)
     setHistoryData(null)
-    setExpandedVersionId(null)
     try {
       const data = await fetchInviteHistory({ bidPackageId: loadedBidPackageId, inviteId })
       setHistoryData(data)
@@ -472,8 +621,37 @@ export default function PackageDashboardPage() {
     }
   }
 
-  const toggleVersionExpanded = (versionId) => {
-    setExpandedVersionId((prev) => (prev === versionId ? null : versionId))
+  useEffect(() => {
+    if (!historyOpen) return
+
+    const handlePointerDown = (event) => {
+      if (!(event.target instanceof Element)) return
+      if (event.target.closest('.bidder-history-popover') || event.target.closest('.bidder-version-trigger')) return
+      setHistoryOpen(false)
+    }
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') setHistoryOpen(false)
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleEscape)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [historyOpen])
+
+  const enterHistoryView = (version) => {
+    const submittedAt = version?.submitted_at ? new Date(version.submitted_at) : null
+    const isValidDate = submittedAt && !Number.isNaN(submittedAt.getTime())
+    setHistoryView({
+      bidderId: Number(historyInviteId) || 0,
+      version: Number(version?.version_number) || 0,
+      dealerName: String(historyData?.dealer_name || 'Unknown Vendor'),
+      date: isValidDate ? submittedAt.toLocaleDateString() : '—',
+      time: isValidDate ? submittedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—'
+    })
+    setHistoryOpen(false)
   }
 
   const reopenBid = async (inviteId) => {
@@ -619,22 +797,169 @@ export default function PackageDashboardPage() {
     }
   }
 
-  const unapproveRequirement = async (item, requirementKey) => {
+  const unapproveRequirement = async (item, requirementKey, actionType = 'unapproved') => {
     if (!loadedBidPackageId) return
     setLoading(true)
-    setStatusMessage('Removing approval...')
+    setStatusMessage(actionType === 'reset' ? 'Resetting requirement...' : 'Removing approval...')
     try {
       await unapproveSpecItemRequirement({
         bidPackageId: loadedBidPackageId,
         specItemId: item.id,
-        requirementKey
+        requirementKey,
+        actionType
       })
-      setStatusMessage('Approval removed.')
+      setStatusMessage(actionType === 'reset' ? 'Requirement reset.' : 'Approval removed.')
       await loadDashboard({ closeEdit: false })
     } catch (error) {
       setStatusMessage(error.message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const markRequirementNeedsFix = async (item, requirementKey) => {
+    if (!loadedBidPackageId) return
+    setLoading(true)
+    setStatusMessage('Marking requirement as needs fix...')
+    try {
+      await markSpecItemRequirementNeedsFix({
+        bidPackageId: loadedBidPackageId,
+        specItemId: item.id,
+        requirementKey
+      })
+      setStatusMessage('Requirement marked as needs fix.')
+      await loadDashboard({ closeEdit: false })
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const uploadLineItemFile = async (file) => {
+    if (!loadedBidPackageId || !activeLineItemFilesModal?.specItemId || !file) return
+    setLoading(true)
+    setStatusMessage('Uploading file...')
+    try {
+      const result = await createBidPackagePostAwardUpload(loadedBidPackageId, {
+        file,
+        fileName: file.name,
+        specItemId: activeLineItemFilesModal.specItemId,
+        requirementKey: lineItemUploadRequirementKey || undefined
+      })
+      const upload = result?.upload
+      if (upload) {
+        setActiveLineItemFilesModal((prev) => {
+          if (!prev) return prev
+          return {
+            ...prev,
+            uploads: [upload, ...(prev.uploads || [])]
+          }
+        })
+      }
+      setLineItemUploadFile(null)
+      setLineItemUploadRequirementKey('')
+      setStatusMessage('File uploaded.')
+      await loadDashboard({ closeEdit: false })
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const downloadSingleLineItemFile = async (upload) => {
+    if (!upload?.download_url) return
+    const requirementLabel = upload.requirement_key ? (activeModalRequirementLabelByKey[upload.requirement_key] || upload.requirement_key) : ''
+    const targetFileName = fileNameWithRequirementTag(
+      upload.file_name || 'download',
+      requirementLabel,
+      activeLineItemFilesModal?.codeTag || '',
+      lineItemDownloadIncludeTag,
+      lineItemDownloadIncludeCode
+    )
+
+    const response = await fetch(`${API_BASE_URL}${upload.download_url}`, { credentials: 'include' })
+    if (!response.ok) throw new Error(`Download failed (${response.status})`)
+    const blob = await response.blob()
+    const objectUrl = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = targetFileName
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(objectUrl)
+  }
+
+  const downloadAllLineItemFiles = async () => {
+    const downloadableUploads = filteredActiveModalUploads.filter((upload) => Boolean(upload?.download_url))
+    if (downloadableUploads.length === 0) return
+
+    setLineItemBulkDownloading(true)
+    try {
+      const url = bidPackagePostAwardUploadsBundleUrl(loadedBidPackageId, {
+        uploadIds: downloadableUploads.map((upload) => upload.id),
+        includeTag: lineItemDownloadIncludeTag,
+        includeCode: lineItemDownloadIncludeCode
+      })
+      window.open(url, '_blank', 'noopener,noreferrer')
+      setStatusMessage(`Preparing ZIP for ${downloadableUploads.length} file${downloadableUploads.length === 1 ? '' : 's'}.`)
+    } catch (error) {
+      setStatusMessage(error.message || 'Unable to download all files.')
+    } finally {
+      setLineItemBulkDownloading(false)
+    }
+  }
+
+  const deleteLineItemFile = async (upload) => {
+    if (!loadedBidPackageId || !upload?.id) return
+    if (upload?.uploader_role !== 'designer') return
+    const confirmed = window.confirm('Delete this designer-uploaded file?')
+    if (!confirmed) return
+
+    setLoading(true)
+    setStatusMessage('Deleting file...')
+    try {
+      await deleteBidPackagePostAwardUpload(loadedBidPackageId, upload.id)
+      setActiveLineItemFilesModal((prev) => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          uploads: (prev.uploads || []).filter((item) => item.id !== upload.id)
+        }
+      })
+      setStatusMessage('File deleted.')
+      await loadDashboard({ closeEdit: false })
+    } catch (error) {
+      setStatusMessage(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const updateLineItemUploadRequirement = async (upload, requirementKey) => {
+    if (!loadedBidPackageId || !upload?.id) return
+    setLineItemSavingTagUploadId(upload.id)
+    try {
+      const result = await updateBidPackagePostAwardUpload(loadedBidPackageId, upload.id, { requirementKey })
+      const updatedUpload = result?.upload
+      setActiveLineItemFilesModal((prev) => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          uploads: (prev.uploads || []).map((item) => (
+            item.id === upload.id
+              ? { ...item, ...(updatedUpload || {}), requirement_key: (updatedUpload?.requirement_key ?? requirementKey) || null }
+              : item
+          ))
+        }
+      })
+      setStatusMessage('File tag updated.')
+    } catch (error) {
+      setStatusMessage(error.message || 'Unable to update requirement tag.')
+    } finally {
+      setLineItemSavingTagUploadId(null)
     }
   }
 
@@ -708,24 +1033,45 @@ export default function PackageDashboardPage() {
     }
   }
 
+  const openClearAwardModal = (row) => {
+    if (!loadedBidPackageId || !postAwardActive) return
+    setClearAwardModal({
+      dealerName: vendorDisplayName(row?.dealer_name)
+    })
+  }
+
   const clearAwardForPackage = async () => {
     if (!loadedBidPackageId || !postAwardActive) return
-    const confirmed = window.confirm(
-      'Remove current award and return this package to bidding mode?'
-    )
-    if (!confirmed) return
 
     setLoading(true)
     setStatusMessage('Removing award...')
     try {
       await clearBidPackageAward({ bidPackageId: loadedBidPackageId })
       setStatusMessage('Award removed.')
+      setClearAwardModal(null)
       await loadDashboard()
     } catch (error) {
       setStatusMessage(error.message)
     } finally {
       setLoading(false)
     }
+  }
+
+  const enableApprovalsOnlyMode = () => {
+    if (!loadedBidPackageId) return
+    storeValue(approvalsOnlyStorageKey(loadedBidPackageId), '1')
+    setApprovalsOnlyMode(true)
+  }
+
+  const disableApprovalsOnlyMode = () => {
+    if (!loadedBidPackageId) return
+    storeValue(approvalsOnlyStorageKey(loadedBidPackageId), '')
+    setApprovalsOnlyMode(false)
+  }
+
+  const inviteBiddersFromApprovals = () => {
+    disableApprovalsOnlyMode()
+    setShowAddBidderForm(false)
   }
 
   useEffect(() => {
@@ -754,16 +1100,94 @@ export default function PackageDashboardPage() {
   }, [restoredLoadedBidPackageId, selectedBidPackageId, loadingPackages, loading])
 
   const postAwardActive = Boolean(loadedPackageSettings?.awarded_bid_id)
+  const approvalTrackingActive = Boolean(postAwardActive || approvalsOnlyMode)
   const currentAwardedBidIdStr = loadedPackageSettings?.awarded_bid_id != null
     ? String(loadedPackageSettings.awarded_bid_id)
     : null
   const visibleInviteRows = useMemo(() => {
-    if (!postAwardActive || showAllBidders || !currentAwardedBidIdStr) return rows
+    if (!postAwardActive || !currentAwardedBidIdStr || showAllAwardedBidders) return rows
     return rows.filter((row) => row.bid_id != null && String(row.bid_id) === currentAwardedBidIdStr)
-  }, [rows, postAwardActive, showAllBidders, currentAwardedBidIdStr])
-  const lineItemsActionColumnCount = postAwardActive ? 0 : 1
+  }, [rows, postAwardActive, currentAwardedBidIdStr, showAllAwardedBidders])
+  const sortedInviteRows = useMemo(() => {
+    const list = [...visibleInviteRows]
+    const indexByInviteId = new Map(visibleInviteRows.map((row, index) => [String(row.invite_id), index]))
+    const createdOrderSort = (a, b) => {
+      const ai = indexByInviteId.get(String(a.invite_id)) ?? 0
+      const bi = indexByInviteId.get(String(b.invite_id)) ?? 0
+      return ai - bi
+    }
+    const bidderTotalForSort = (row) => {
+      const minTotal = numberOrNull(row.min_total_amount)
+      if (minTotal != null) return minTotal
+      return numberOrNull(row.latest_total_amount)
+    }
+    const statusRankForSort = (row) => {
+      if (row.status === 'submitted') return 0
+      if (row.status === 'in_progress') return 1
+      if (row.status === 'not_started') return 2
+      return 3
+    }
+
+    if (biddersSort === 'vendor_asc') {
+      return list.sort((a, b) => (
+        String(vendorDisplayName(a.dealer_name)).localeCompare(String(vendorDisplayName(b.dealer_name)), undefined, { sensitivity: 'base' })
+      ))
+    }
+    if (biddersSort === 'status') {
+      return list.sort((a, b) => {
+        const rankCmp = statusRankForSort(a) - statusRankForSort(b)
+        if (rankCmp !== 0) return rankCmp
+        return createdOrderSort(a, b)
+      })
+    }
+    if (biddersSort === 'total_low_high') {
+      return list.sort((a, b) => {
+        const av = bidderTotalForSort(a)
+        const bv = bidderTotalForSort(b)
+        if (av == null && bv == null) return createdOrderSort(a, b)
+        if (av == null) return 1
+        if (bv == null) return -1
+        if (av !== bv) return av - bv
+        return createdOrderSort(a, b)
+      })
+    }
+    if (biddersSort === 'total_high_low') {
+      return list.sort((a, b) => {
+        const av = bidderTotalForSort(a)
+        const bv = bidderTotalForSort(b)
+        if (av == null && bv == null) return createdOrderSort(a, b)
+        if (av == null) return 1
+        if (bv == null) return -1
+        if (av !== bv) return bv - av
+        return createdOrderSort(a, b)
+      })
+    }
+
+    return list.sort(createdOrderSort)
+  }, [visibleInviteRows, biddersSort])
+  const comparisonVisibleInviteIdSet = useMemo(
+    () => new Set((comparisonVisibleInviteIds || []).map((id) => String(id))),
+    [comparisonVisibleInviteIds]
+  )
+  useEffect(() => {
+    if (approvalTrackingActive) {
+      setComparisonVisibleInviteIds([])
+      return
+    }
+
+    const inviteIds = sortedInviteRows.map((row) => row.invite_id)
+    setComparisonVisibleInviteIds((prev) => {
+      if (!Array.isArray(prev) || prev.length === 0) return inviteIds
+      const prevSet = new Set(prev.map((id) => String(id)))
+      const retained = inviteIds.filter((id) => prevSet.has(String(id)))
+      const added = inviteIds.filter((id) => !prevSet.has(String(id)))
+      const merged = [...retained, ...added]
+      return merged.length > 0 ? merged : inviteIds
+    })
+  }, [sortedInviteRows, approvalTrackingActive, loadedBidPackageId])
+  const lineItemsActionColumnCount = approvalTrackingActive ? 0 : 1
   const lineItemsBaseColumnCount = 1 + (showProductColumn ? 1 : 0) + (showBrandColumn ? 1 : 0) + (showQtyColumn ? 1 : 0) + lineItemsActionColumnCount
-  const lineItemsExtraColumnCount = postAwardActive ? (requiredApprovalColumns.length + 1) : 0
+  const lineItemsExtraColumnCount = approvalTrackingActive ? (requiredApprovalColumns.length + 1) : 0
   const normalizedLineItemsPerPage = Number.isFinite(Number(lineItemsPerPage)) ? Number(lineItemsPerPage) : 50
   const pendingApprovalsCount = (item) => (item.required_approvals || []).reduce((count, requirement) => (
     requirement.applies && !requirement.approved ? count + 1 : count
@@ -782,7 +1206,7 @@ export default function PackageDashboardPage() {
         : pendingApprovalsCount(item)
     )
 
-    if (!postAwardActive || lineItemsSort === 'code_tag') {
+    if (!approvalTrackingActive || lineItemsSort === 'code_tag') {
       return list.sort(codeTagSort)
     }
 
@@ -801,13 +1225,52 @@ export default function PackageDashboardPage() {
     }
 
     return list.sort(codeTagSort)
-  }, [specItems, postAwardActive, lineItemsSort, lineItemsPendingSnapshot])
+  }, [specItems, approvalTrackingActive, lineItemsSort, lineItemsPendingSnapshot])
   const totalLineItemsPages = Math.max(Math.ceil(sortedSpecItems.length / normalizedLineItemsPerPage), 1)
   const lineItemsRangeStart = sortedSpecItems.length === 0 ? 0 : ((lineItemsPage - 1) * normalizedLineItemsPerPage) + 1
   const lineItemsRangeEnd = Math.min(lineItemsPage * normalizedLineItemsPerPage, sortedSpecItems.length)
   const lineItemsSectionTitle = loadedBidPackageId
     ? `Line Items (${lineItemsRangeStart}-${lineItemsRangeEnd} of ${sortedSpecItems.length})`
     : 'Line Items In Package'
+  const biddersSectionTitle = `Bidders (${visibleInviteRows.length})`
+  const requiredApprovalsBySpecItem = useMemo(
+    () => Object.fromEntries(
+      (specItems || []).map((item) => [String(item.id), item.required_approvals || []])
+    ),
+    [specItems]
+  )
+  const lineItemUploadsBySpecItem = useMemo(
+    () => Object.fromEntries(
+      (specItems || []).map((item) => [String(item.id), item.uploads || []])
+    ),
+    [specItems]
+  )
+  const activeModalRequirementOptions = useMemo(() => (
+    Array.isArray(activeLineItemFilesModal?.requirements)
+      ? activeLineItemFilesModal.requirements
+      : []
+  ), [activeLineItemFilesModal])
+  const activeModalRequirementLabelByKey = useMemo(() => (
+    Object.fromEntries(activeModalRequirementOptions.map((option) => [option.key, option.label]))
+  ), [activeModalRequirementOptions])
+  const activeModalRetagOptions = useMemo(() => {
+    const options = [...activeModalRequirementOptions]
+    const seen = new Set(options.map((option) => String(option.key)))
+    const uploads = Array.isArray(activeLineItemFilesModal?.uploads) ? activeLineItemFilesModal.uploads : []
+    uploads.forEach((upload) => {
+      const key = String(upload?.requirement_key || '').trim()
+      if (!key || seen.has(key)) return
+      seen.add(key)
+      options.push({ key, label: activeModalRequirementLabelByKey[key] || key })
+    })
+    return options
+  }, [activeLineItemFilesModal, activeModalRequirementLabelByKey, activeModalRequirementOptions])
+  const filteredActiveModalUploads = useMemo(() => {
+    const uploads = Array.isArray(activeLineItemFilesModal?.uploads) ? activeLineItemFilesModal.uploads : []
+    if (lineItemFilterRequirementKey === 'all') return uploads
+    if (lineItemFilterRequirementKey === 'untagged') return uploads.filter((upload) => !upload.requirement_key)
+    return uploads.filter((upload) => String(upload.requirement_key || '') === String(lineItemFilterRequirementKey))
+  }, [activeLineItemFilesModal, lineItemFilterRequirementKey])
   const paginatedSpecItems = sortedSpecItems.slice(
     (lineItemsPage - 1) * normalizedLineItemsPerPage,
     lineItemsPage * normalizedLineItemsPerPage
@@ -823,177 +1286,153 @@ export default function PackageDashboardPage() {
   }, [lineItemsPage, totalLineItemsPages])
 
   useEffect(() => {
-    if (!postAwardActive) {
-      setShowAllBidders(false)
+    if (!approvalTrackingActive) {
       if (lineItemsSort !== 'code_tag') setLineItemsSort('code_tag')
       if (Object.keys(lineItemsPendingSnapshot).length > 0) setLineItemsPendingSnapshot({})
       return
     }
     if (showAddBidderForm) setShowAddBidderForm(false)
-  }, [postAwardActive, showAddBidderForm, lineItemsSort, lineItemsPendingSnapshot])
+  }, [approvalTrackingActive, showAddBidderForm, lineItemsSort, lineItemsPendingSnapshot])
 
   useEffect(() => {
-    if (!postAwardActive) return
+    if (!approvalTrackingActive) return
     if (lineItemsSort === 'code_tag') return
     setLineItemsPendingSnapshot(buildPendingSnapshot(specItems))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadedBidPackageId, lineItemsSort])
+  }, [loadedBidPackageId, lineItemsSort, approvalTrackingActive])
 
   return (
     <div className="stack">
-      <SectionCard
-        title="Bid Package Dashboard"
-      >
-        <div className="form-grid">
-          <label>
-            Bid Package
-            <select
-              value={selectedBidPackageId}
-              onChange={(event) => {
-                const nextId = event.target.value
-                setSelectedBidPackageId(nextId)
-                storeValue(DASHBOARD_SELECTED_PACKAGE_KEY, nextId)
-              }}
-              disabled={loadingPackages}
+      <SectionCard className="section-card-flat package-detail-header-card">
+        <button
+          type="button"
+          className="all-packages-back-link"
+          onClick={() => navigate('/package')}
+        >
+          ‹ All Packages
+        </button>
+        <h1 className="package-detail-title">{packageHeaderTitle}</h1>
+        {loadedPackageSettings?.visibility === 'public' && loadedPackageSettings?.public_url ? (
+          <div className="public-url-inline">
+            <span className="text-muted">Public URL:</span>
+            <a
+              href={`${window.location.origin}${loadedPackageSettings.public_url}`}
+              target="_blank"
+              rel="noreferrer"
             >
-              {bidPackages.length === 0 ? <option value="">No bid packages yet</option> : null}
-              {bidPackages.map((pkg) => (
-                <option key={pkg.id} value={pkg.id}>
-                  {pkg.name} in {pkg.project_name || 'Unknown Project'} (Bid Package ID: {pkg.id}, Project ID: {pkg.project_id ?? '—'})
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        <div className="action-row">
-          <button className="btn btn-primary" onClick={loadDashboard} disabled={!selectedBidPackageId || loading || loadingPackages}>
-            Load Bid Package
-          </button>
-          {loadedBidPackageId ? (
-            <button
-              className="btn"
-              onClick={() => setEditingBidPackage(true)}
-              disabled={loading || loadingPackages}
-            >
-              Edit Bid Package
+              <code>{`${window.location.origin}${loadedPackageSettings.public_url}`}</code>
+            </a>
+            <button className="btn" onClick={copyPublicUrl} disabled={loading}>
+              {copiedPublicUrl ? 'Copied' : 'Copy'}
             </button>
-          ) : null}
-          {loadedPackageSettings?.visibility === 'public' && loadedPackageSettings?.public_url ? (
-            <div className="public-url-inline">
-              <span className="text-muted">Public URL:</span>
-              <a
-                href={`${window.location.origin}${loadedPackageSettings.public_url}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                <code>{`${window.location.origin}${loadedPackageSettings.public_url}`}</code>
-              </a>
-              <button className="btn" onClick={copyPublicUrl} disabled={loading}>
-                {copiedPublicUrl ? 'Copied' : 'Copy'}
-              </button>
-            </div>
-          ) : null}
-        </div>
-
-        {loadedPackageSettings && editingBidPackage ? (
-          <div className="stack" style={{ marginTop: '0.75rem' }}>
-            <div className="form-grid">
-              <label>
-                Bid Package Name
-                <input value={packageNameDraft} onChange={(event) => setPackageNameDraft(event.target.value)} />
-              </label>
-              <label>
-                Visibility
-                <select value={visibilityDraft} onChange={(event) => setVisibilityDraft(event.target.value)}>
-                  <option value="private">Private</option>
-                  <option value="public">Public</option>
-                </select>
-              </label>
-              <label>
-                Instructions
-                <textarea
-                  value={instructionsDraft}
-                  onChange={(event) => setInstructionsDraft(event.target.value)}
-                  rows={3}
-                  placeholder="Optional bidder instructions"
-                />
-              </label>
-            </div>
-            <div className="checkbox-grid">
-              <p className="text-muted" style={{ margin: 0 }}>Include General Pricing Fields</p>
-              {GENERAL_PRICING_FIELDS.map((field) => (
-                <label key={field.key} className="checkbox-row">
-                  <input
-                    type="checkbox"
-                    checked={activeGeneralFieldsDraft.includes(field.key)}
-                    onChange={(event) => {
-                      setActiveGeneralFieldsDraft((prev) => {
-                        if (event.target.checked) return [...prev, field.key]
-                        return prev.filter((key) => key !== field.key)
-                      })
-                    }}
-                  />
-                  {field.label}
-                </label>
-              ))}
-            </div>
-            <div className="action-row">
-              <button className="btn" onClick={saveBidPackageSettings} disabled={loading || !loadedBidPackageId || !packageNameDraft.trim()}>
-                Save Bid Package
-              </button>
-              <button className="btn btn-danger" onClick={removeBidPackage} disabled={!selectedBidPackageId || loading || loadingPackages}>
-                Delete Bid Package
-              </button>
-              <button className="btn" onClick={() => setEditingBidPackage(false)} disabled={loading}>
-                Cancel
-              </button>
-            </div>
           </div>
         ) : null}
-
         {statusMessage ? <p className="text-muted">{statusMessage}</p> : null}
       </SectionCard>
 
-      <SectionCard title="Bidders">
-        {postAwardActive ? (
-          <div className="action-row" style={{ marginBottom: '0.6rem', justifyContent: 'flex-end' }}>
-            <button
-              className="btn"
-              type="button"
-              onClick={() => setShowAllBidders((prev) => !prev)}
-              disabled={loading || !currentAwardedBidIdStr}
-            >
-              {showAllBidders ? 'Show Winner Only' : 'Show All'}
-            </button>
+      {!(approvalsOnlyMode && !postAwardActive) ? (
+      <SectionCard className="section-card-flat bidders-flat">
+        <div style={{ maxWidth: '985px' }}>
+          <div className="bidders-head-row">
+            <h2>{biddersSectionTitle}</h2>
+            {!postAwardActive && !approvalsOnlyMode ? (
+              <div className="bidders-head-actions">
+                <label className="bidders-sort-control">
+                  <span className="bidders-sort-label">Sort by:</span>
+                  <select
+                    className="bidders-sort-select"
+                    value={biddersSort}
+                    onChange={(event) => setBiddersSort(event.target.value)}
+                    disabled={loading}
+                  >
+                    <option value="created">Created</option>
+                    <option value="vendor_asc">Vendor Name</option>
+                    <option value="total_low_high">Ascending</option>
+                    <option value="total_high_low">Descending</option>
+                  </select>
+                </label>
+              </div>
+            ) : null}
+            {!postAwardActive && approvalsOnlyMode ? (
+              <div className="bidders-head-actions">
+                <span className="text-muted" style={{ fontSize: '0.8rem' }}>Approvals-only mode</span>
+              </div>
+            ) : null}
           </div>
-        ) : null}
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Vendor</th>
-              <th>Status</th>
-              <th>V / Saved-Submitted</th>
-              <th>Snapshot</th>
-              <th className="num">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visibleInviteRows.map((row) => {
-              const awardMeta = awardStatusMeta(row.selection_status)
-              const rowStatusMeta = statusMeta(row.status)
-              const rowAccessMeta = accessMeta(row.access_state)
-              const primaryStatusMeta = postAwardActive
-                ? (awardMeta || { label: '—', toneClass: 'state-muted' })
-                : rowStatusMeta
-              return (
-              <tr key={row.invite_id}>
-                <td>
-                  <div className="stack" style={{ gap: '0.2rem' }}>
-                    <span>{vendorDisplayName(row.dealer_name)}</span>
-                    <span className="text-muted bidder-password-inline">
-                      <span className="bidder-password-row">
-                        Password:
+          <table className="table data-table" style={{ width: '100%' }}>
+            <thead>
+              <tr>
+                <th style={{ width: '200px' }} className="data-table-col-head">Vendor</th>
+                <th style={{ width: '110px' }} className="data-table-col-head">Status</th>
+                <th style={{ width: '240px' }} className="data-table-col-head">Snapshot</th>
+                <th style={{ width: '160px' }} className="data-table-col-head">Total</th>
+                <th style={{ width: '60px', textAlign: 'right' }} className="data-table-col-head"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedInviteRows.map((row) => {
+                const effectiveSelectionStatus = postAwardActive
+                  ? (row.bid_id != null && String(row.bid_id) === currentAwardedBidIdStr ? 'awarded' : 'not_selected')
+                  : row.selection_status
+                const isNotStarted = row.status === 'not_started'
+                const completionPct = Math.max(0, Math.min(100, Number(row.completion_pct ?? 0)))
+                const isFullyComplete = completionPct >= 100
+                const minTotal = numberOrNull(row.min_total_amount)
+                const maxTotal = numberOrNull(row.max_total_amount)
+                const minLabel = compactMoney(minTotal)
+                const maxLabel = compactMoney(maxTotal)
+                const totalDisplay = postAwardActive
+                  ? totalLabel(row, { postAwardActive })
+                  : (minTotal != null && maxTotal != null
+                    ? (minLabel === maxLabel ? minLabel : `${minLabel}-${maxLabel}`)
+                    : compactMoney(row.latest_total_amount))
+                const isComparisonVisible = comparisonVisibleInviteIdSet.has(String(row.invite_id))
+                return (
+                  <tr key={row.invite_id} className={isNotStarted ? 'bidder-row-muted' : ''}>
+                    <td>
+                      <div className="bidder-vendor-topline">
+                        <span className="bidder-controls">
+                          {!postAwardActive ? (
+                            <input
+                              type="checkbox"
+                              className="comparison-visibility-checkbox"
+                              checked={isComparisonVisible}
+                              onChange={(event) => {
+                                const checked = event.target.checked
+                                setComparisonVisibleInviteIds((prev) => {
+                                  const current = Array.isArray(prev) ? prev : []
+                                  if (checked) {
+                                    return current.some((id) => String(id) === String(row.invite_id))
+                                      ? current
+                                      : [...current, row.invite_id]
+                                  }
+                                  const next = current.filter((id) => String(id) !== String(row.invite_id))
+                                  return next
+                                })
+                              }}
+                              disabled={loading}
+                              title="Show/hide bidder in comparison table"
+                              aria-label="Show/hide bidder in comparison table"
+                            />
+                          ) : null}
+                          <button
+                            type="button"
+                            className="access-dot-btn"
+                            onClick={() => {
+                              if (row.access_state === 'enabled') disableBidder(row.invite_id)
+                              else enableBidder(row.invite_id)
+                            }}
+                            disabled={loading}
+                            title={row.access_state === 'enabled' ? 'Click to disable bidder access' : 'Click to enable bidder access'}
+                            aria-label={row.access_state === 'enabled' ? 'Disable bidder access' : 'Enable bidder access'}
+                            style={{ background: row.access_state === 'enabled' ? '#10b981' : '#ef4444' }}
+                          />
+                        </span>
+                        <span className="bidder-vendor-name">{vendorDisplayName(row.dealer_name)}</span>
+                      </div>
+                      <div className="bidder-password-line">
+                        <span className="bidder-controls-spacer" />
+                        <span>Password:</span>
                         {editingPasswordInviteId === row.invite_id ? (
                           <input
                             className="password-inline-input"
@@ -1014,667 +1453,584 @@ export default function PackageDashboardPage() {
                             disabled={savingPasswordInviteId === row.invite_id}
                           />
                         ) : (
-                          <>
-                            <span>{row.invite_password || '—'}</span>
-                            <button
-                              type="button"
-                              className="btn password-inline-edit-btn"
-                              onClick={() => {
-                                setEditingPasswordInviteId(row.invite_id)
-                                setPasswordEditDraft(row.invite_password || '')
-                              }}
-                              disabled={loading}
-                              title="Edit password"
-                              aria-label="Edit password"
-                            >
-                              ✎
-                            </button>
-                            <button
-                              type="button"
-                              className="btn password-inline-edit-btn"
-                              onClick={() => copyInviteLink(row)}
-                              disabled={loading}
-                              title="Copy invite link"
-                              aria-label="Copy invite link"
-                            >
-                              {copiedInviteId === row.invite_id ? '✓' : '⧉'}
-                            </button>
-                            <button
-                              type="button"
-                              className="btn password-inline-edit-btn"
-                              onClick={() => emailInvite(row)}
-                              disabled={loading}
-                              title="Email invite"
-                              aria-label="Email invite"
-                            >
-                              ✉
-                            </button>
-                          </>
-                        )}
-                      </span>
-                    </span>
-                  </div>
-                </td>
-                <td>
-                  <div className="bidder-state-cell">
-                    <div className="bidder-state-dots bidder-state-dots-labeled">
-                      <span className="state-dot-item" title={primaryStatusMeta.label}>
-                        <span className={`table-state-dot ${primaryStatusMeta.toneClass}`} aria-label={primaryStatusMeta.label} />
-                        <span className="state-dot-label">{primaryStatusMeta.label}</span>
-                        {postAwardActive && row.selection_status === 'awarded' ? (
                           <button
-                            type="button"
-                            className="btn status-inline-action-btn"
-                            onClick={clearAwardForPackage}
+                            className="btn"
+                            style={{ padding: '0.1rem 0.35rem', fontSize: '0.75rem', minWidth: 'auto', lineHeight: '1', fontFamily: 'monospace', background: '#f5f5f5', border: '1px solid #e0e0e0' }}
+                            title="Click to change password"
+                            onClick={() => {
+                              setEditingPasswordInviteId(row.invite_id)
+                              setPasswordEditDraft(row.invite_password || '')
+                            }}
                             disabled={loading}
-                            title="Remove award"
-                            aria-label="Remove award"
                           >
-                            ×
+                            {row.invite_password || '—'}
                           </button>
-                        ) : null}
-                        {!postAwardActive && row.status === 'submitted' ? (
+                        )}
+                        <button
+                          className="btn bidder-inline-icon-btn"
+                          title="Copy access link"
+                          onClick={() => copyInviteLink(row)}
+                          disabled={loading}
+                        >
+                          <img src={linkIcon} alt="" aria-hidden="true" />
+                        </button>
+                        <button
+                          className="btn bidder-inline-icon-btn"
+                          title="Email invitation"
+                          onClick={() => emailInvite(row)}
+                          disabled={loading}
+                        >
+                          <img src={emailIcon} alt="" aria-hidden="true" />
+                        </button>
+                      </div>
+                    </td>
+                    <td>
+                      {postAwardActive && effectiveSelectionStatus === 'awarded' ? (
+                        <div className="bidder-status-cell">
                           <button
                             type="button"
-                            className="btn status-inline-action-btn"
+                            className="bidder-status-main status-tone-submitted"
+                            title="Click to remove award"
+                            onClick={() => openClearAwardModal(row)}
+                            disabled={loading}
+                          >
+                            Awarded
+                          </button>
+                        </div>
+                      ) : null}
+                      {postAwardActive && effectiveSelectionStatus === 'not_selected' ? (
+                        <div className="bidder-status-cell">
+                          <span className="bidder-status-main status-tone-neutral">Lost</span>
+                        </div>
+                      ) : null}
+                      {!postAwardActive && row.status === 'submitted' ? (
+                        <div className="bidder-status-cell">
+                          <span className="bidder-status-main status-tone-submitted">Submitted</span>
+                          <button
+                            type="button"
+                            className="bidder-status-action"
+                            title="Click to reopen bid"
                             onClick={() => reopenBid(row.invite_id)}
                             disabled={loading}
-                            title="Reopen bid"
-                            aria-label="Reopen bid"
                           >
-                            ↺
+                            <img src={reopenIcon} alt="" aria-hidden="true" />
+                            <span>Re-open</span>
                           </button>
-                        ) : null}
-                        {!postAwardActive && row.status === 'in_progress' && row.can_reclose ? (
+                        </div>
+                      ) : null}
+                      {!postAwardActive && row.status === 'in_progress' && row.current_version > 0 ? (
+                        <div className="bidder-status-cell">
+                          <span className="bidder-status-main status-tone-warning">In progress</span>
                           <button
                             type="button"
-                            className="btn status-inline-action-btn"
+                            className="bidder-status-action bidder-status-action-lock"
+                            title="Click to lock bid"
                             onClick={() => recloseBid(row)}
                             disabled={loading}
-                            title={`Reclose to submitted v${row.current_version || '—'}`}
-                            aria-label="Reclose bid"
                           >
-                            🔒
+                            <img src={lockIcon} alt="" aria-hidden="true" />
+                            <span>Lock</span>
                           </button>
-                        ) : null}
-                      </span>
-                      <span className="state-dot-item" title={rowAccessMeta.label}>
-                        <span className={`table-state-dot ${rowAccessMeta.toneClass}`} aria-label={rowAccessMeta.label} />
-                        <span className="state-dot-label">{rowAccessMeta.label}</span>
-                        {row.access_state === 'enabled' ? (
-                          <button
-                            type="button"
-                            className="btn status-inline-action-btn"
-                            onClick={() => disableBidder(row.invite_id)}
-                            disabled={loading}
-                            title="Disable bidder access"
-                            aria-label="Disable bidder access"
+                        </div>
+                      ) : null}
+                      {!postAwardActive && row.status === 'in_progress' && row.current_version === 0 ? (
+                        <div className="bidder-status-cell">
+                          <span className="bidder-status-main status-tone-warning">In progress</span>
+                        </div>
+                      ) : null}
+                      {!postAwardActive && row.status === 'not_started' ? (
+                        <div className="bidder-status-cell">
+                          <span className="bidder-status-main status-tone-neutral">No Activity</span>
+                        </div>
+                      ) : null}
+                    </td>
+                    <td>
+                      {isNotStarted ? (
+                        <span className="text-muted" style={{ fontSize: '0.85rem' }}>Not started</span>
+                      ) : (
+                        <>
+                          <div
+                            style={{
+                              background: '#e8e8e8',
+                              height: '6px',
+                              borderRadius: '3px',
+                              overflow: 'hidden',
+                              marginBottom: '0.4rem'
+                            }}
                           >
-                            ⛔
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            className="btn status-inline-action-btn"
-                            onClick={() => enableBidder(row.invite_id)}
-                            disabled={loading}
-                            title="Enable bidder access"
-                            aria-label="Enable bidder access"
-                          >
-                            ✓
-                          </button>
-                        )}
-                      </span>
-                    </div>
-                  </div>
-                </td>
-                <td>
-                  <div className="version-cell bidder-version-cell">
-                    <span className="bidder-version-line">
-                      <span>{row.current_version > 0 ? `v${row.current_version}` : '—'}</span>
+                          <div
+                            style={{
+                              width: `${Math.max(0, Math.min(100, Number(row.completion_pct ?? 0)))}%`,
+                              height: '100%',
+                              background: isFullyComplete ? '#10b981' : '#f59e0b',
+                              transition: 'width 0.3s'
+                            }}
+                          />
+                        </div>
+                          <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.75rem' }}>
+                            <span
+                              style={{
+                                color: isFullyComplete ? '#10b981' : '#f59e0b',
+                                fontWeight: '500'
+                              }}
+                            >
+                              {`${Math.round(completionPct)}% complete`}
+                            </span>
+                            {(row.bod_skipped_pct ?? 0) > 0 ? (
+                              <span style={{ color: '#f59e0b', fontWeight: '500' }}>
+                                {`${Math.round(row.bod_skipped_pct ?? 0)}% BoD skipped`}
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="text-muted" style={{ fontSize: '0.75rem', marginTop: '0.2rem' }}>
+                            {`${row.bod_only_count ?? 0} BoD • ${row.mixed_line_count ?? 0} BoD-Sub • ${row.sub_only_count ?? 0} Sub`}
+                          </div>
+                        </>
+                      )}
+                    </td>
+                    <td>
+                      <div className="bidder-total-main">
+                        {totalDisplay}
+                      </div>
+                      {!isNotStarted && (row.submitted_at || row.last_saved_at) ? (
+                        <div className="bidder-version-cell">
+                          <div className="bidder-version-line">
+                            <span className="bidder-version-date">
+                              {formatCompactDateTime(row.submitted_at || row.last_saved_at)}
+                            </span>
+                            <button
+                              type="button"
+                              className="mini-link-btn bidder-total-sub bidder-version-trigger"
+                              style={{ marginTop: 0 }}
+                              onClick={() => openHistory(row.invite_id)}
+                              disabled={loading}
+                              title="View bid version history"
+                              aria-expanded={historyOpen && String(historyInviteId) === String(row.invite_id)}
+                            >
+                              {`v${row.current_version || 0}`}
+                            </button>
+                          </div>
+                          {historyOpen && String(historyInviteId) === String(row.invite_id) ? (
+                            <div className="bidder-history-popover" role="dialog" aria-label="Bid Version History">
+                              <div className="history-modal-head">
+                                <h2>Bid Version History</h2>
+                              </div>
+                              {historyLoading ? <p className="text-muted">Loading history...</p> : null}
+                              {!historyLoading && historyData ? (
+                                <div className="history-version-list">
+                                  {(historyData.versions || []).map((version) => {
+                                    const isCurrent = Number(version.version_number) === Number(historyData.current_version)
+                                    const itemCount = Number.isFinite(Number(version.line_items_count))
+                                      ? Number(version.line_items_count)
+                                        : Array.isArray(version.line_items)
+                                        ? version.line_items.length
+                                        : 0
+                                    if (isCurrent) {
+                                      return (
+                                        <div key={version.id} className="history-version-item is-current">
+                                          <div className="history-version-grid">
+                                            <div className="history-version-top">
+                                              <div className="history-version-label-wrap">
+                                                <span className="history-version-label">v{version.version_number}</span>
+                                                <span className="history-version-current-pill">Current</span>
+                                              </div>
+                                            </div>
+                                            <div className="history-version-left">
+                                              <div className="history-version-date">{formatHistoryDateTime(version.submitted_at)}</div>
+                                              <div className="history-version-items">{`${itemCount} items`}</div>
+                                            </div>
+                                            <span className="history-version-total">{compactHistoryMoney(version.total_amount)}</span>
+                                          </div>
+                                      </div>
+                                    )
+                                  }
+
+                                  return (
+                                      <button
+                                        key={version.id}
+                                        type="button"
+                                        className="history-version-item is-clickable"
+                                        onClick={() => enterHistoryView(version)}
+                                      >
+                                        <div className="history-version-grid">
+                                          <div className="history-version-top">
+                                            <div className="history-version-label-wrap">
+                                              <span className="history-version-label">v{version.version_number}</span>
+                                            </div>
+                                          </div>
+                                          <div className="history-version-left">
+                                            <div className="history-version-date">{formatHistoryDateTime(version.submitted_at)}</div>
+                                            <div className="history-version-items">{`${itemCount} items`}</div>
+                                          </div>
+                                          <span className="history-version-total">{compactHistoryMoney(version.total_amount)}</span>
+                                        </div>
+                                      </button>
+                                    )
+                                  })}
+                                  {(historyData.versions || []).length === 0 ? (
+                                    <p className="text-muted">No submitted versions yet.</p>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
                       <button
-                        type="button"
-                        className="btn status-inline-action-btn"
-                        onClick={() => openHistory(row.invite_id)}
+                        className="btn"
+                        style={{
+                          padding: '0.25rem 0.4rem',
+                          fontSize: '0.75rem',
+                          minWidth: 'auto',
+                          lineHeight: '1',
+                          color: '#ef4444'
+                        }}
+                        title="Remove bidder"
+                        onClick={() => deleteBidderRow(row)}
                         disabled={loading}
-                        title="View bid history"
-                        aria-label="View bid history"
                       >
-                        🕘
+                        ✕
                       </button>
-                      <span>· {formatTimestamp(row.submitted_at || row.last_saved_at)}</span>
-                    </span>
-                  </div>
-                </td>
-                <td>
-                  <div className="bidder-state-cell">
-                    <div className="bidder-state-quoted">
-                      {`${row.quoted_count ?? 0}/${row.total_requested_count ?? 0} quoted (${row.bod_only_count ?? 0} BoD · ${row.mixed_line_count ?? 0} BoD+Sub · ${row.sub_only_count ?? 0} Sub)`}
-                    </div>
-                    <div className="bidder-state-pills">
-                      <span className={`completion-pill ${(row.completion_pct ?? 0) >= 100 ? 'complete' : 'incomplete'}`}>
-                        {`${Math.round(row.completion_pct ?? 0)}% complete`}
-                      </span>
-                      <span className="completion-pill warning">
-                        {`${Math.round(row.bod_skipped_pct ?? 0)}% BoD skipped`}
-                      </span>
-                    </div>
-                  </div>
-                </td>
-                <td className="num bidder-total-cell">
-                  <div className="bidder-total-wrap">
-                    <span>{totalLabel(row, { postAwardActive })}</span>
-                    <button
-                      type="button"
-                      className="btn bidder-total-delete-btn"
-                      onClick={() => deleteBidderRow(row)}
-                      disabled={loading}
-                      title="Delete bidder and bid"
-                      aria-label="Delete bidder and bid"
-                    >
-                      ×
-                    </button>
-                  </div>
-                </td>
-              </tr>
-              )
-            })}
-            {visibleInviteRows.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="text-muted">
-                  {postAwardActive && !showAllBidders ? 'No awarded bidder found.' : 'No invite rows loaded yet.'}
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+                    </td>
+                  </tr>
+                )
+              })}
+              {sortedInviteRows.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="text-muted">
+                    {postAwardActive ? 'No awarded bidder found.' : 'No invite rows loaded yet.'}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
         <div className="action-row bidders-footer-actions">
-          <button
-            className="btn btn-primary dashboard-compare-btn"
-            type="button"
-            onClick={() => {
-              if (!loadedBidPackageId) return
-              navigate(`/comparison?bid_package_id=${encodeURIComponent(String(loadedBidPackageId))}`)
-            }}
-            disabled={!loadedBidPackageId || loading}
-          >
-            Compare
-          </button>
-          {!postAwardActive && !showAddBidderForm ? (
+          {postAwardActive && rows.length > 1 ? (
             <button
-              className="btn"
-              onClick={() => setShowAddBidderForm(true)}
+              className="btn btn-primary"
+              onClick={() => setShowAllAwardedBidders((prev) => !prev)}
               disabled={!loadedBidPackageId || loading}
             >
-              + Bidder
+              {showAllAwardedBidders ? 'View Winner Only' : 'View All'}
             </button>
           ) : null}
-        </div>
-        {!postAwardActive && showAddBidderForm ? (
-          <div className="invite-inline-row" style={{ marginTop: '0.5rem', justifyContent: 'center' }}>
-            <label>
-              Vendor
-              <select value={selectedVendorKey} onChange={(event) => onVendorChange(event.target.value)}>
-                <option value="">Select vendor contact</option>
+          {!postAwardActive && !approvalsOnlyMode && showAddBidderForm ? (
+            <div className="bidder-add-head-inline">
+              <button
+                className="btn bidder-add-cancel-btn"
+                type="button"
+                onClick={() => setShowAddBidderForm(false)}
+                disabled={loading}
+                title="Cancel"
+              >
+                ✕
+              </button>
+              <select
+                className="bidder-add-head-input bidder-add-head-select"
+                value={selectedVendorKey}
+                onChange={(event) => onVendorChange(event.target.value)}
+              >
+                <option value="">Select vendor</option>
                 {vendorOptions.map((option) => (
                   <option key={option.key} value={option.key}>{option.label}</option>
                 ))}
               </select>
-            </label>
-            <label>
-              Password
-              <input type="text" value={invitePassword} onChange={(event) => setInvitePassword(event.target.value)} placeholder="Set invite password" />
-            </label>
-            <div className="invite-inline-action">
-              <button className="btn btn-primary" onClick={addInvite} disabled={loading || !dealerName.trim() || !invitePassword || !loadedBidPackageId}>
-                Add Bidder
-              </button>
+              <input
+                className="bidder-add-head-input bidder-add-head-password"
+                type="text"
+                value={invitePassword}
+                onChange={(event) => setInvitePassword(event.target.value)}
+                placeholder="Set Invite Password"
+              />
               <button
-                className="btn"
-                type="button"
-                onClick={() => setShowAddBidderForm(false)}
-                disabled={loading}
+                className="btn bidder-add-submit-btn"
+                onClick={addInvite}
+                disabled={loading || !dealerName.trim() || !invitePassword || !loadedBidPackageId}
+                title="Add bidder"
               >
-                Cancel
+                +
               </button>
             </div>
-          </div>
-        ) : null}
-      </SectionCard>
-
-      <SectionCard
-        title={lineItemsSectionTitle}
-        actions={
-          <div className="action-row">
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                checked={showProductColumn}
-                onChange={(event) => setShowProductColumn(event.target.checked)}
-              />
-              Product
-            </label>
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                checked={showBrandColumn}
-                onChange={(event) => setShowBrandColumn(event.target.checked)}
-              />
-              Brand
-            </label>
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                checked={showQtyColumn}
-                onChange={(event) => setShowQtyColumn(event.target.checked)}
-              />
-              Qty/UOM
-            </label>
-            {postAwardActive ? <span className="action-separator" aria-hidden="true">|</span> : null}
-            {postAwardActive ? (
-              <label>
-                Sort
-                <select
-                  value={lineItemsSort}
-                  onChange={(event) => {
-                    setLineItemsSort(event.target.value)
-                    setLineItemsPage(1)
-                  }}
-                >
-                  <option value="code_tag">Code/Tag</option>
-                  <option value="pending_desc">Needs Attention (Most Pending)</option>
-                  <option value="pending_asc">Most Approved (Least Pending)</option>
-                </select>
-              </label>
-            ) : null}
-            {postAwardActive && lineItemsSort !== 'code_tag' ? (
-              <button
-                type="button"
-                className="btn icon-btn-subtle"
-                onClick={refreshLineItemsSort}
-                disabled={loading}
-                title="Refresh sort order"
-                aria-label="Refresh sort order"
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M20 4v6h-6" />
-                  <path d="M4 20v-6h6" />
-                  <path d="M20 10a8 8 0 0 0-14-4" />
-                  <path d="M4 14a8 8 0 0 0 14 4" />
-                </svg>
-              </button>
-            ) : null}
-            {postAwardActive ? <span className="action-separator" aria-hidden="true">|</span> : null}
-            {postAwardActive ? (
-              <button
-                type="button"
-                className="btn icon-btn-subtle"
-                onClick={clearApprovalsForCurrentVendor}
-                disabled={loading || !currentAwardedBidId}
-                title="Clear current vendor approvals"
-                aria-label="Clear current vendor approvals"
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M7 16.5l6.2-6.2a2 2 0 0 1 2.8 0l1.7 1.7a2 2 0 0 1 0 2.8L12 20.5H7v-4z" />
-                  <path d="M14.5 9l1.7-1.7a2 2 0 0 1 2.8 0l.7.7a2 2 0 0 1 0 2.8L18 12.5" />
-                  <path d="M4 20.5h16" />
-                </svg>
-              </button>
-            ) : null}
-            {postAwardActive ? <span className="action-separator" aria-hidden="true">|</span> : null}
-            <label>
-              Rows per page
-              <select
-                value={lineItemsPerPage}
-                onChange={(event) => {
-                  const nextSize = Number(event.target.value)
-                  setLineItemsPerPage(nextSize)
-                  setLineItemsPage(1)
-                }}
-              >
-                <option value={25}>25</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-                <option value={200}>200</option>
-              </select>
-            </label>
-          </div>
-        }
-      >
-        {!loadedBidPackageId ? (
-          <p className="text-muted">Load a bid package to view line items.</p>
-        ) : null}
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Code/Tag</th>
-              {showProductColumn ? <th>Product</th> : null}
-              {showBrandColumn ? <th>Brand</th> : null}
-              {showQtyColumn ? <th>Qty/UOM</th> : null}
-              {!postAwardActive ? <th>Actions</th> : null}
-              {postAwardActive ? requiredApprovalColumns.map((column) => (
-                <th key={`line-item-approval-head-${column.key}`}>{column.label}</th>
-              )) : null}
-              {postAwardActive ? <th>Files</th> : null}
-            </tr>
-          </thead>
-          <tbody>
-            {paginatedSpecItems.map((item) => {
-              const applicableApprovals = (item.required_approvals || []).filter((requirement) => requirement.applies)
-              const hasPendingApprovals = applicableApprovals.some((requirement) => !requirement.approved)
-              const allApprovalsComplete = applicableApprovals.length > 0 && !hasPendingApprovals
-              const codeTagStatusClass = postAwardActive
-                ? (allApprovalsComplete ? 'code-tag-approved' : 'code-tag-pending')
-                : ''
-
-              return (
-              <tr key={item.id} className={!item.active ? 'spec-item-inactive-row' : ''}>
-                <td>
-                  <span className={`code-tag-status ${codeTagStatusClass}`.trim()}>{item.code_tag || '—'}</span>
-                </td>
-                {showProductColumn ? <td>{item.product_name || '—'}</td> : null}
-                {showBrandColumn ? <td>{item.brand_name || '—'}</td> : null}
-                {showQtyColumn ? <td>{item.quantity || '—'} {item.uom || ''}</td> : null}
-                {!postAwardActive ? (
-                  <td>
-                    {item.active ? (
-                      <button
-                        type="button"
-                        className="btn btn-danger"
-                        onClick={() => removeSpecItem(item)}
-                        disabled={loading}
-                      >
-                        Deactivate
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="btn"
-                        onClick={() => reactivateItem(item)}
-                        disabled={loading}
-                      >
-                        Re-activate
-                      </button>
-                    )}
-                  </td>
-                ) : null}
-                {postAwardActive ? (item.required_approvals || []).map((requirement) => {
-                  if (!requirement.applies) {
-                    return (
-                      <td key={`${item.id}-${requirement.key}`} className="approval-cell-na">
-                        N/A
-                      </td>
-                    )
-                  }
-
-                  if (requirement.approved) {
-                    return (
-                      <td key={`${item.id}-${requirement.key}`} className="approval-cell-approved">
-                        <div>Approved {formatTimestamp(requirement.approved_at)}</div>
-                        <button
-                          type="button"
-                          className="mini-link-btn"
-                          onClick={() => unapproveRequirement(item, requirement.key)}
-                          disabled={loading}
-                        >
-                          Unapprove
-                        </button>
-                      </td>
-                    )
-                  }
-
-                  return (
-                    <td key={`${item.id}-${requirement.key}`} className="approval-cell-pending">
-                      <button
-                        type="button"
-                        className="btn"
-                        onClick={() => approveRequirement(item, requirement.key)}
-                        disabled={loading}
-                      >
-                        Approve
-                      </button>
-                    </td>
-                  )
-                }) : null}
-                {postAwardActive ? (
-                  <td>
-                    {(item.uploads || []).length > 0 ? (
-                      <div className="action-row" style={{ gap: '0.4rem' }}>
-                        <span>{(item.uploads || []).length} file(s)</span>
-                        <button
-                          type="button"
-                          className="btn mini-link-btn"
-                          style={{ marginTop: 0 }}
-                          onClick={() => setActiveLineItemFilesModal({
-                            specItemId: item.id,
-                            codeTag: item.code_tag || '—',
-                            productName: item.product_name || '—',
-                            uploads: item.uploads || []
-                          })}
-                        >
-                          View
-                        </button>
-                      </div>
-                    ) : '—'}
-                  </td>
-                ) : null}
-              </tr>
-              )
-            })}
-            {sortedSpecItems.length === 0 ? (
-              <tr>
-                <td colSpan={lineItemsBaseColumnCount + lineItemsExtraColumnCount} className="text-muted">
-                  No line items in this package.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-        {loadedBidPackageId ? (
-          <div className="action-row" style={{ justifyContent: 'center', marginTop: '0.55rem', alignItems: 'center' }}>
+          ) : null}
+          {!postAwardActive && !showAddBidderForm ? (
+            <button
+              className="btn bidder-add-link-btn"
+              onClick={() => setShowAddBidderForm(true)}
+              disabled={!loadedBidPackageId || loading || approvalsOnlyMode}
+            >
+              <img src={plusBidderIcon} alt="" aria-hidden="true" />
+              <span>Bidder</span>
+            </button>
+          ) : null}
+          {!postAwardActive && !showAddBidderForm && rows.length === 0 && !approvalsOnlyMode ? (
             <button
               className="btn"
-              type="button"
-              onClick={() => setLineItemsPage((prev) => Math.max(prev - 1, 1))}
-              disabled={lineItemsPage <= 1}
+              onClick={enableApprovalsOnlyMode}
+              disabled={!loadedBidPackageId || loading}
             >
-              Prev
+              Skip to Approvals
             </button>
-            <span className="text-muted">Page {lineItemsPage} / {totalLineItemsPages}</span>
-            <button
-              className="btn"
-              type="button"
-              onClick={() => setLineItemsPage((prev) => Math.min(prev + 1, totalLineItemsPages))}
-              disabled={lineItemsPage >= totalLineItemsPages}
-            >
-              Next
-            </button>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
       </SectionCard>
+      ) : null}
+      {loadedBidPackageId ? (
+        <>
+          {historyView ? (
+            <div className="comparison-history-banner">
+              <div className="comparison-history-banner-left">
+                <span className="comparison-history-banner-icon" aria-hidden="true">📋</span>
+                <div className="comparison-history-banner-content">
+                  <p className="comparison-history-banner-title">Viewing Historical Bid</p>
+                  <p className="comparison-history-banner-details">{`${historyView.dealerName} - Version ${historyView.version} (${historyView.date} at ${historyView.time})`}</p>
+                  <p className="comparison-history-banner-subtext">You cannot award a bid while in history mode.</p>
+                </div>
+              </div>
+              <button type="button" className="btn comparison-history-exit-btn" onClick={() => setHistoryView(null)}>
+                Exit History View
+              </button>
+            </div>
+          ) : null}
+          <ComparisonPage
+            embedded
+            bidPackageId={loadedBidPackageId}
+            allowItemManagement={!approvalTrackingActive}
+            awardedWorkspace={approvalTrackingActive}
+            requiredApprovalColumns={approvalTrackingActive ? requiredApprovalColumns : []}
+            requiredApprovalsBySpecItem={approvalTrackingActive ? requiredApprovalsBySpecItem : {}}
+            lineItemUploadsBySpecItem={approvalTrackingActive ? lineItemUploadsBySpecItem : {}}
+            onApproveRequirement={approvalTrackingActive ? ({ specItemId, requirementKey }) => approveRequirement({ id: specItemId }, requirementKey) : null}
+            onUnapproveRequirement={approvalTrackingActive ? ({ specItemId, requirementKey, actionType }) => unapproveRequirement({ id: specItemId }, requirementKey, actionType) : null}
+            onNeedsFixRequirement={approvalTrackingActive ? ({ specItemId, requirementKey }) => markRequirementNeedsFix({ id: specItemId }, requirementKey) : null}
+            onOpenLineItemFiles={approvalTrackingActive ? ({ specItemId, codeTag, productName, brandName, uploads = [] }) => {
+              setLineItemUploadFile(null)
+              setLineItemUploadRequirementKey('')
+              setLineItemFilterRequirementKey('all')
+              setLineItemDownloadIncludeTag(false)
+              setLineItemDownloadIncludeCode(false)
+              const applicableRequirements = (requiredApprovalsBySpecItem[String(specItemId)] || [])
+                .filter((requirement) => requirement.applies)
+                .map((requirement) => ({ key: requirement.key, label: requirement.label }))
+              setActiveLineItemFilesModal({
+                specItemId: specItemId || null,
+                codeTag: codeTag || '—',
+                productName: productName || '—',
+                brandName: brandName || '',
+                uploads,
+                requirements: applicableRequirements
+              })
+            } : null}
+            onAwardChanged={async () => {
+              await loadDashboard({ closeEdit: false })
+            }}
+            forcedVisibleDealerIds={approvalTrackingActive ? null : comparisonVisibleInviteIds}
+            historyView={historyView}
+            onExitHistoryView={() => setHistoryView(null)}
+            lineItemsHeaderActionLabel={!postAwardActive && approvalsOnlyMode ? 'Invite Bidders' : ''}
+            onLineItemsHeaderAction={!postAwardActive && approvalsOnlyMode ? inviteBiddersFromApprovals : null}
+            lineItemsHeaderActionDisabled={!loadedBidPackageId || loading}
+          />
+        </>
+      ) : (
+        <SectionCard title="Line Item Comparison">
+          <p className="text-muted">Load a bid package to view comparison.</p>
+        </SectionCard>
+      )}
 
       {activeLineItemFilesModal ? (
-        <div className="modal-backdrop" onClick={() => setActiveLineItemFilesModal(null)}>
-          <div className="modal-card award-modal-card" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-backdrop" onClick={() => {
+          setActiveLineItemFilesModal(null)
+          setLineItemUploadFile(null)
+          setLineItemUploadRequirementKey('')
+          setLineItemFilterRequirementKey('all')
+          setLineItemDownloadIncludeTag(false)
+          setLineItemDownloadIncludeCode(false)
+        }}>
+          <div className="modal-card file-room-modal-card" onClick={(event) => event.stopPropagation()}>
             <div className="section-head">
               <h2>{`Files · ${activeLineItemFilesModal.codeTag}`}</h2>
-              <button className="btn" onClick={() => setActiveLineItemFilesModal(null)}>Close</button>
+              <button
+                className="btn"
+                onClick={() => {
+                  setActiveLineItemFilesModal(null)
+                  setLineItemUploadFile(null)
+                  setLineItemUploadRequirementKey('')
+                  setLineItemFilterRequirementKey('all')
+                  setLineItemDownloadIncludeTag(false)
+                  setLineItemDownloadIncludeCode(false)
+                }}
+              >
+                ✕
+              </button>
             </div>
-            <p className="text-muted" style={{ marginTop: 0 }}>{activeLineItemFilesModal.productName}</p>
-            <table className="table dense">
-              <thead>
-                <tr>
-                  <th>File</th>
-                  <th>Uploaded By</th>
-                  <th>Uploaded At</th>
-                  <th>Download</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(activeLineItemFilesModal.uploads || []).map((upload) => (
-                  <tr key={`line-item-modal-upload-${upload.id}`}>
-                    <td>{upload.file_name || '—'}</td>
-                    <td>{upload.uploaded_by || upload.uploader_role || '—'}</td>
-                    <td>{formatTimestamp(upload.uploaded_at)}</td>
-                    <td>
-                      {upload.download_url ? (
-                        <a
-                          className="mini-link-btn"
-                          href={`${API_BASE_URL}${upload.download_url}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          download
-                        >
-                          Download
-                        </a>
-                      ) : (
-                        <span className="text-muted">—</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-                {(activeLineItemFilesModal.uploads || []).length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="text-muted">No files uploaded yet.</td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
+            <p className="text-muted file-room-subtitle" style={{ marginTop: 0 }}>
+              {activeLineItemFilesModal.brandName
+                ? `${activeLineItemFilesModal.productName} by ${activeLineItemFilesModal.brandName}`
+                : activeLineItemFilesModal.productName}
+            </p>
+            <div className="designer-file-room-dropzone">
+              <div className="designer-file-room-upload-icon">⇪</div>
+              <div className="designer-file-room-drop-copy">Drag and drop files here, or click to browse</div>
+              {activeModalRequirementOptions.length > 0 ? (
+                <label className="designer-file-room-tag-select">
+                  <span>Requirement Tag (optional)</span>
+                  <select
+                    value={lineItemUploadRequirementKey}
+                    onChange={(event) => setLineItemUploadRequirementKey(event.target.value)}
+                    disabled={loading}
+                  >
+                    <option value="">None</option>
+                    {activeModalRequirementOptions.map((option) => (
+                      <option key={`upload-requirement-${option.key}`} value={option.key}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <label className="btn btn-primary designer-file-room-select-btn">
+                Select Files
+                <input
+                  type="file"
+                  style={{ display: 'none' }}
+                  disabled={loading}
+                  onChange={async (event) => {
+                    const file = event.target.files?.[0] || null
+                    setLineItemUploadFile(file)
+                    if (file) await uploadLineItemFile(file)
+                    event.target.value = ''
+                  }}
+                />
+              </label>
+            </div>
+            {activeModalRequirementOptions.length > 0 ? (
+              <div className="designer-file-room-filter-row">
+                <span>Filter:</span>
+                <select
+                  value={lineItemFilterRequirementKey}
+                  onChange={(event) => setLineItemFilterRequirementKey(event.target.value)}
+                >
+                  <option value="all">All files</option>
+                  <option value="untagged">Untagged</option>
+                  {activeModalRequirementOptions.map((option) => (
+                    <option key={`filter-requirement-${option.key}`} value={option.key}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+            <div className="designer-file-room-bulk-actions">
+              <div className="designer-file-room-download-options">
+                <label className="checkbox-row designer-file-room-download-toggle">
+                  <input
+                    type="checkbox"
+                    checked={lineItemDownloadIncludeCode}
+                    onChange={(event) => setLineItemDownloadIncludeCode(event.target.checked)}
+                  />
+                  Include code/tag in filenames
+                </label>
+                <label className="checkbox-row designer-file-room-download-toggle">
+                  <input
+                    type="checkbox"
+                    checked={lineItemDownloadIncludeTag}
+                    onChange={(event) => setLineItemDownloadIncludeTag(event.target.checked)}
+                  />
+                  Include requirement tag in filenames
+                </label>
+              </div>
+              <button
+                type="button"
+                className="btn"
+                onClick={downloadAllLineItemFiles}
+                disabled={lineItemBulkDownloading || filteredActiveModalUploads.filter((upload) => Boolean(upload?.download_url)).length === 0}
+              >
+                {lineItemBulkDownloading ? 'Downloading…' : 'Download All'}
+              </button>
+            </div>
+            <div className="designer-file-room-list">
+              {filteredActiveModalUploads.map((upload) => (
+                <div key={`line-item-modal-upload-${upload.id}`} className="designer-file-room-item">
+                  <div className="designer-file-room-item-icon">📄</div>
+                  <div className="designer-file-room-item-main">
+                    <div className="designer-file-room-item-name">
+                      {upload.file_name || '—'}
+                      {upload.requirement_key ? (
+                        <span className="designer-file-room-requirement-chip">
+                          {activeModalRequirementLabelByKey[upload.requirement_key] || upload.requirement_key}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="designer-file-room-item-meta">
+                      {[formatFileSize(upload.byte_size), upload.uploaded_by || upload.uploader_role || '—', formatShortDate(upload.uploaded_at)].filter(Boolean).join(' • ')}
+                    </div>
+                  </div>
+                  <div className="designer-file-room-item-actions">
+                    {activeModalRetagOptions.length > 0 ? (
+                      <select
+                        className="designer-file-room-item-tag-select"
+                        value={upload.requirement_key || ''}
+                        onChange={(event) => updateLineItemUploadRequirement(upload, event.target.value)}
+                        disabled={loading || lineItemSavingTagUploadId === upload.id}
+                        title="Requirement tag"
+                      >
+                        <option value="">No tag</option>
+                        {activeModalRetagOptions.map((option) => (
+                          <option key={`upload-item-tag-${upload.id}-${option.key}`} value={option.key}>{option.label}</option>
+                        ))}
+                      </select>
+                    ) : null}
+                    {upload.download_url ? (
+                      <button
+                        type="button"
+                        className="btn designer-file-room-icon-btn"
+                        onClick={async () => {
+                          try {
+                            await downloadSingleLineItemFile(upload)
+                          } catch (error) {
+                            setStatusMessage(error.message || 'Unable to download file.')
+                          }
+                        }}
+                        title="Download"
+                      >
+                        ↓
+                      </button>
+                    ) : null}
+                    {upload.uploader_role === 'designer' ? (
+                      <button
+                        className="btn designer-file-room-icon-btn danger"
+                        onClick={() => deleteLineItemFile(upload)}
+                        disabled={loading}
+                        title="Delete"
+                      >
+                        🗑
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+              {filteredActiveModalUploads.length === 0 ? (
+                <div className="designer-file-room-empty text-muted">No files uploaded yet</div>
+              ) : null}
+            </div>
           </div>
         </div>
       ) : null}
 
-      <SectionCard title="Post-Award Workspace (Lite)">
-        {!loadedBidPackageId ? (
-          <p className="text-muted">Load a bid package to view post-award workspace details.</p>
-        ) : null}
-        {loadedBidPackageId && !postAwardActive ? (
-          <p className="text-muted">Workspace activates automatically after a vendor is awarded.</p>
-        ) : null}
-        {loadedBidPackageId && postAwardActive ? (
-          <div className="stack">
-            <div>
-              <h3 style={{ marginBottom: '0.35rem' }}>General Files (Vendor Uploads)</h3>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>File</th>
-                    <th>Note</th>
-                    <th>Uploaded By</th>
-                    <th>Uploaded At</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {generalUploads.map((upload) => (
-                    <tr key={`general-upload-${upload.id}`}>
-                      <td>{upload.file_name}</td>
-                      <td>{upload.note || '—'}</td>
-                      <td>{upload.uploaded_by || upload.uploader_role}</td>
-                      <td>{formatTimestamp(upload.uploaded_at)}</td>
-                    </tr>
-                  ))}
-                  {generalUploads.length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="text-muted">No general files uploaded yet.</td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
+      {clearAwardModal ? (
+        <div className="modal-backdrop" onClick={() => setClearAwardModal(null)}>
+          <div className="modal-card award-modal-card" onClick={(event) => event.stopPropagation()}>
+            <h3>Confirm Remove Award</h3>
+            <p className="award-modal-copy">
+              {`Removing this award will return the package to bidding mode. You can lock in ${clearAwardModal.dealerName || 'this vendor'} as the selected vendor again later if needed.`}
+            </p>
+            <div className="action-row">
+              <button type="button" className="btn" onClick={() => setClearAwardModal(null)} disabled={loading}>
+                Cancel
+              </button>
+              <button type="button" className="btn btn-primary" onClick={clearAwardForPackage} disabled={loading}>
+                Remove Award
+              </button>
             </div>
-            <p className="text-muted">Required approvals and per-line-item files are shown in the Line Items In Package table above.</p>
-          </div>
-        ) : null}
-      </SectionCard>
-
-      {historyOpen ? (
-        <div className="modal-backdrop" onClick={() => setHistoryOpen(false)}>
-          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
-            <div className="section-head">
-              <h2>Bid Version History</h2>
-              <button className="btn" onClick={() => setHistoryOpen(false)}>Close</button>
-            </div>
-
-            {historyLoading ? <p className="text-muted">Loading history...</p> : null}
-
-            {!historyLoading && historyData ? (
-              <div className="stack">
-                <p className="text-muted">
-                  {historyData.dealer_name} • Current Version: v{historyData.current_version || 0}
-                </p>
-
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th></th>
-                      <th>Version</th>
-                      <th>Submitted</th>
-                      <th>Total Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(historyData.versions || []).map((version) => (
-                      <tr key={version.id}>
-                        <td>
-                          <button className="btn" onClick={() => toggleVersionExpanded(version.id)}>
-                            {expandedVersionId === version.id ? 'Hide' : 'View'}
-                          </button>
-                        </td>
-                        <td>v{version.version_number}</td>
-                        <td>{formatTimestamp(version.submitted_at)}</td>
-                        <td>{money(version.total_amount)}</td>
-                      </tr>
-                    ))}
-                    {(historyData.versions || []).length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="text-muted">No submitted versions yet.</td>
-                      </tr>
-                    ) : null}
-                  </tbody>
-                </table>
-
-                {(historyData.versions || [])
-                  .filter((version) => expandedVersionId === version.id)
-                  .map((version) => (
-                    <div key={`snapshot-${version.id}`}>
-                      <p className="text-muted">Version v{version.version_number} line items</p>
-                      <table className="table">
-                        <thead>
-                          <tr>
-                            <th>Code/Tag</th>
-                            <th>Product</th>
-                            <th>Brand Name</th>
-                            <th>Qty/UOM</th>
-                            <th>Unit List Price</th>
-                            <th>% Discount</th>
-                            <th>% Tariff</th>
-                            <th>Unit Net Price</th>
-                            <th>Extended Price</th>
-                            <th>Lead Time</th>
-                            <th>Dealer Notes</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(version.line_items || []).map((line, index) => (
-                            <tr key={`${version.id}-${line.spec_item_id || index}`}>
-                              <td>{line.code_tag || '—'}</td>
-                              <td>{line.product_name || '—'}</td>
-                              <td>{line.brand_name || '—'}</td>
-                              <td>{line.quantity || '—'} {line.uom || ''}</td>
-                              <td>{money(line.unit_list_price ?? line.unit_price)}</td>
-                              <td>{line.discount_percent ?? '—'}</td>
-                              <td>{line.tariff_percent ?? '—'}</td>
-                              <td>{money(line.unit_net_price ?? netUnitPrice(line.unit_list_price ?? line.unit_price, line.discount_percent, line.tariff_percent))}</td>
-                              <td>{money(line.extended_price ?? extendedAmount(line.unit_net_price ?? netUnitPrice(line.unit_list_price ?? line.unit_price, line.discount_percent, line.tariff_percent), line.quantity))}</td>
-                              <td>{line.lead_time_days ?? '—'}</td>
-                              <td>{line.dealer_notes || '—'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ))}
-              </div>
-            ) : null}
           </div>
         </div>
       ) : null}

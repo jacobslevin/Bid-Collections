@@ -275,7 +275,195 @@ RSpec.describe 'Admin Bid Packages API', type: :request do
       expect(response).to have_http_status(:ok)
       approval = SpecItemRequirementApproval.find_by(spec_item_id: item.id, requirement_key: requirement_key)
       expect(approval).to be_present
+      expect(approval.status).to eq('approved')
       expect(approval.approved_at).to be_present
+    end
+
+    it 'tracks needs-fix timestamps and preserves history when later approved' do
+      item = bid_package.spec_items.create!(
+        spec_item_id: 'S-03',
+        category: 'Seating',
+        manufacturer: 'Acme',
+        product_name: 'Bench',
+        sku: 'BN-1',
+        description: 'Bench',
+        quantity: 2,
+        uom: 'EA'
+      )
+      requirement_key = PostAward::RequiredApprovalsService.requirements_for_spec_item(item).first[:key]
+
+      post "/api/bid_packages/#{bid_package.id}/award",
+           params: { bid_id: bid_a.id, awarded_by: 'designer@example.com' }.to_json,
+           headers: { 'CONTENT_TYPE' => 'application/json' }
+
+      patch "/api/bid_packages/#{bid_package.id}/spec_items/#{item.id}/requirements/#{requirement_key}/needs_fix",
+            params: {}.to_json,
+            headers: { 'CONTENT_TYPE' => 'application/json' }
+      expect(response).to have_http_status(:ok)
+
+      patch "/api/bid_packages/#{bid_package.id}/spec_items/#{item.id}/requirements/#{requirement_key}/needs_fix",
+            params: {}.to_json,
+            headers: { 'CONTENT_TYPE' => 'application/json' }
+      expect(response).to have_http_status(:ok)
+
+      patch "/api/bid_packages/#{bid_package.id}/spec_items/#{item.id}/requirements/#{requirement_key}/approve",
+            params: {}.to_json,
+            headers: { 'CONTENT_TYPE' => 'application/json' }
+      expect(response).to have_http_status(:ok)
+
+      approval = SpecItemRequirementApproval.find_by(spec_item_id: item.id, requirement_key: requirement_key)
+      expect(approval).to be_present
+      expect(approval.status).to eq('approved')
+      expect(approval.needs_fix_dates_array.length).to eq(2)
+      expect(approval.approved_at).to be_present
+    end
+
+    it 'clears only approval date when unapproving an item with needs-fix history' do
+      item = bid_package.spec_items.create!(
+        spec_item_id: 'S-04',
+        category: 'Seating',
+        manufacturer: 'Acme',
+        product_name: 'Task Chair',
+        sku: 'TC-1',
+        description: 'Task Chair',
+        quantity: 8,
+        uom: 'EA'
+      )
+      requirement_key = PostAward::RequiredApprovalsService.requirements_for_spec_item(item).first[:key]
+
+      post "/api/bid_packages/#{bid_package.id}/award",
+           params: { bid_id: bid_a.id, awarded_by: 'designer@example.com' }.to_json,
+           headers: { 'CONTENT_TYPE' => 'application/json' }
+
+      patch "/api/bid_packages/#{bid_package.id}/spec_items/#{item.id}/requirements/#{requirement_key}/needs_fix",
+            params: {}.to_json,
+            headers: { 'CONTENT_TYPE' => 'application/json' }
+      expect(response).to have_http_status(:ok)
+
+      patch "/api/bid_packages/#{bid_package.id}/spec_items/#{item.id}/requirements/#{requirement_key}/approve",
+            params: {}.to_json,
+            headers: { 'CONTENT_TYPE' => 'application/json' }
+      expect(response).to have_http_status(:ok)
+
+      patch "/api/bid_packages/#{bid_package.id}/spec_items/#{item.id}/requirements/#{requirement_key}/unapprove",
+            params: {}.to_json,
+            headers: { 'CONTENT_TYPE' => 'application/json' }
+      expect(response).to have_http_status(:ok)
+
+      approval = SpecItemRequirementApproval.find_by(spec_item_id: item.id, requirement_key: requirement_key)
+      expect(approval).to be_present
+      expect(approval.status).to eq('pending')
+      expect(approval.approved_at).to be_nil
+      expect(approval.needs_fix_dates_array.length).to eq(1)
+      expect(approval.action_history_array.map { |event| event['action'] }).to include('needs_fix', 'approved', 'unapproved')
+    end
+
+    it 'records reset actions in approval history' do
+      item = bid_package.spec_items.create!(
+        spec_item_id: 'S-05',
+        category: 'Seating',
+        manufacturer: 'Acme',
+        product_name: 'Stack Chair',
+        sku: 'SC-1',
+        description: 'Stack Chair',
+        quantity: 12,
+        uom: 'EA'
+      )
+      requirement_key = PostAward::RequiredApprovalsService.requirements_for_spec_item(item).first[:key]
+
+      post "/api/bid_packages/#{bid_package.id}/award",
+           params: { bid_id: bid_a.id, awarded_by: 'designer@example.com' }.to_json,
+           headers: { 'CONTENT_TYPE' => 'application/json' }
+
+      patch "/api/bid_packages/#{bid_package.id}/spec_items/#{item.id}/requirements/#{requirement_key}/needs_fix",
+            params: {}.to_json,
+            headers: { 'CONTENT_TYPE' => 'application/json' }
+      expect(response).to have_http_status(:ok)
+
+      patch "/api/bid_packages/#{bid_package.id}/spec_items/#{item.id}/requirements/#{requirement_key}/unapprove",
+            params: { action_type: 'reset' }.to_json,
+            headers: { 'CONTENT_TYPE' => 'application/json' }
+      expect(response).to have_http_status(:ok)
+
+      approval = SpecItemRequirementApproval.find_by(spec_item_id: item.id, requirement_key: requirement_key)
+      expect(approval).to be_present
+      expect(approval.status).to eq('pending')
+      expect(approval.action_history_array.map { |event| event['action'] }).to include('needs_fix', 'reset')
+    end
+
+    it 'exports approval matrix and audit in awarded mode' do
+      item = bid_package.spec_items.create!(
+        spec_item_id: 'S-06',
+        category: 'Seating',
+        manufacturer: 'Acme',
+        product_name: 'Lounge Chair',
+        sku: 'LC-1',
+        description: 'Lounge Chair',
+        quantity: 3,
+        uom: 'EA'
+      )
+      requirement_key = PostAward::RequiredApprovalsService.requirements_for_spec_item(item).first[:key]
+
+      post "/api/bid_packages/#{bid_package.id}/award",
+           params: { bid_id: bid_a.id, awarded_by: 'designer@example.com' }.to_json,
+           headers: { 'CONTENT_TYPE' => 'application/json' }
+
+      patch "/api/bid_packages/#{bid_package.id}/spec_items/#{item.id}/requirements/#{requirement_key}/needs_fix",
+            params: {}.to_json,
+            headers: { 'CONTENT_TYPE' => 'application/json' }
+      patch "/api/bid_packages/#{bid_package.id}/spec_items/#{item.id}/requirements/#{requirement_key}/approve",
+            params: {}.to_json,
+            headers: { 'CONTENT_TYPE' => 'application/json' }
+      patch "/api/bid_packages/#{bid_package.id}/spec_items/#{item.id}/requirements/#{requirement_key}/unapprove",
+            params: { action_type: 'reset' }.to_json,
+            headers: { 'CONTENT_TYPE' => 'application/json' }
+
+      get "/api/bid_packages/#{bid_package.id}/export.csv",
+          params: { export_type: 'approval_matrix' }
+      expect(response).to have_http_status(:ok)
+      expect(response.media_type).to eq('text/csv')
+      expect(response.body).to include('Code/Tag')
+      expect(response.body).to include('LC-1')
+
+      get "/api/bid_packages/#{bid_package.id}/export.csv",
+          params: { export_type: 'approval_audit' }
+      expect(response).to have_http_status(:ok)
+      expect(response.media_type).to eq('text/csv')
+      expect(response.body).to include('Action Date')
+      expect(response.body).to include('Reset')
+    end
+
+    it 'allows admin to upload and delete designer post-award files for a line item' do
+      item = bid_package.spec_items.create!(
+        spec_item_id: 'S-07',
+        category: 'Seating',
+        manufacturer: 'Acme',
+        product_name: 'Marker Board',
+        sku: 'MB-1',
+        description: 'Marker Board',
+        quantity: 1,
+        uom: 'EA'
+      )
+
+      post "/api/bid_packages/#{bid_package.id}/award",
+           params: { bid_id: bid_a.id, awarded_by: 'designer@example.com' }.to_json,
+           headers: { 'CONTENT_TYPE' => 'application/json' }
+
+      post "/api/bid_packages/#{bid_package.id}/post_award_uploads",
+           params: {
+             spec_item_id: item.id,
+             file_name: 'designer-note.pdf',
+             note: 'Please review dimensions'
+           }.to_json,
+           headers: { 'CONTENT_TYPE' => 'application/json' }
+
+      expect(response).to have_http_status(:created)
+      upload_id = json_response.dig('upload', 'id')
+      expect(upload_id).to be_present
+
+      delete "/api/bid_packages/#{bid_package.id}/post_award_uploads/#{upload_id}"
+      expect(response).to have_http_status(:ok)
+      expect(PostAwardUpload.find_by(id: upload_id)).to be_nil
     end
 
     it 'clears approvals only for the currently awarded vendor' do

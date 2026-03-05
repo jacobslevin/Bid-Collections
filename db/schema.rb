@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.1].define(version: 2026_03_01_012000) do
+ActiveRecord::Schema[7.1].define(version: 2026_03_04_175602) do
   create_table "bid_award_events", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "bid_package_id", null: false
     t.bigint "from_bid_id"
@@ -129,7 +129,9 @@ ActiveRecord::Schema[7.1].define(version: 2026_03_01_012000) do
     t.string "storage_path"
     t.string "content_type"
     t.bigint "byte_size"
+    t.string "requirement_key"
     t.index ["bid_package_id", "spec_item_id", "created_at"], name: "idx_post_award_uploads_lookup"
+    t.index ["bid_package_id", "spec_item_id", "requirement_key"], name: "idx_post_award_uploads_requirement"
     t.index ["bid_package_id"], name: "index_post_award_uploads_on_bid_package_id"
     t.index ["invite_id"], name: "index_post_award_uploads_on_invite_id"
     t.index ["spec_item_id"], name: "index_post_award_uploads_on_spec_item_id"
@@ -146,11 +148,14 @@ ActiveRecord::Schema[7.1].define(version: 2026_03_01_012000) do
     t.bigint "bid_package_id", null: false
     t.bigint "spec_item_id", null: false
     t.string "requirement_key", null: false
-    t.datetime "approved_at", null: false
+    t.datetime "approved_at"
     t.string "approved_by"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.bigint "bid_id"
+    t.integer "status", default: 0, null: false
+    t.json "needs_fix_dates", null: false
+    t.json "action_history", null: false
     t.index ["bid_id"], name: "index_spec_item_requirement_approvals_on_bid_id"
     t.index ["bid_package_id"], name: "index_spec_item_requirement_approvals_on_bid_package_id"
     t.index ["spec_item_id", "requirement_key", "bid_id"], name: "idx_spec_req_approvals_unique", unique: true

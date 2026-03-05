@@ -3,6 +3,29 @@ class SpecItemRequirementApproval < ApplicationRecord
   belongs_to :spec_item
   belongs_to :bid, optional: true
 
-  validates :requirement_key, :approved_at, presence: true
+  enum :status, { pending: 0, approved: 1, needs_revision: 2 }, default: :pending
+
+  validates :requirement_key, presence: true
+  validates :approved_at, presence: true, if: :approved?
   validates :requirement_key, uniqueness: { scope: [:spec_item_id, :bid_id] }
+
+  def needs_fix_dates_array
+    value = self[:needs_fix_dates]
+    return value if value.is_a?(Array)
+    return [] if value.blank?
+
+    Array(value)
+  rescue NoMethodError
+    []
+  end
+
+  def action_history_array
+    value = self[:action_history]
+    return value if value.is_a?(Array)
+    return [] if value.blank?
+
+    Array(value)
+  rescue NoMethodError
+    []
+  end
 end
