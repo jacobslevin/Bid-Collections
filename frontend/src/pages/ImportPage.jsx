@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import SectionCard from '../components/SectionCard'
 import { createBidPackage, fetchBidPackages, fetchProjects, importRowsToBidPackage, previewBidPackage } from '../lib/api'
 
@@ -10,14 +11,6 @@ const GENERAL_PRICING_FIELDS = [
   { key: 'sales_tax_amount', label: 'Sales Tax' }
 ]
 
-function formatDateStamp() {
-  const now = new Date()
-  const y = now.getFullYear()
-  const m = String(now.getMonth() + 1).padStart(2, '0')
-  const d = String(now.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
-
 function readFileText(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -28,9 +21,13 @@ function readFileText(file) {
 }
 
 export default function ImportPage() {
-  const [importMode, setImportMode] = useState('create_new')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const currentStep = searchParams.get('step') === '2' ? '2' : '1'
 
-  const [packageName, setPackageName] = useState(`Spec Import ${formatDateStamp()}`)
+  const [importMode, setImportMode] = useState('create_new')
+  const [step2View, setStep2View] = useState('existing')
+
+  const [packageName, setPackageName] = useState('')
   const [projects, setProjects] = useState([])
   const [bidPackages, setBidPackages] = useState([])
   const [selectedProjectId, setSelectedProjectId] = useState('')
@@ -41,7 +38,7 @@ export default function ImportPage() {
   const [csvContent, setCsvContent] = useState('')
   const [visibility, setVisibility] = useState('private')
   const [instructions, setInstructions] = useState('')
-  const [activeGeneralFields, setActiveGeneralFields] = useState(GENERAL_PRICING_FIELDS.map((field) => field.key))
+  const [activeGeneralFields, setActiveGeneralFields] = useState([])
 
   const [previewResult, setPreviewResult] = useState(null)
   const [previewErrors, setPreviewErrors] = useState([])
@@ -93,6 +90,10 @@ export default function ImportPage() {
   }, [filteredExistingPackages, importMode, selectedExistingPackageId])
 
   const canPreview = useMemo(() => csvContent && selectedProjectId, [csvContent, selectedProjectId])
+  const canProceedToStep2 = useMemo(
+    () => Boolean(previewResult?.valid && previewResult?.row_count > 0),
+    [previewResult]
+  )
   const canCreate = useMemo(
     () => importMode === 'create_new' && canPreview && previewResult?.valid && packageName && selectedProjectId,
     [canPreview, importMode, previewResult, packageName, selectedProjectId]
@@ -150,10 +151,24 @@ export default function ImportPage() {
 
   const handleModeChange = (mode) => {
     setImportMode(mode)
-    setPreviewResult(null)
-    setPreviewErrors([])
     setCreateResult(null)
     setStatusMessage('')
+  }
+
+  const goToStep = (step) => {
+    if (step === '2') {
+      setSearchParams({ step: '2' })
+      return
+    }
+
+    setSearchParams({})
+  }
+
+  const handleGoToStep2 = () => {
+    if (!canProceedToStep2) return
+    setStep2View('existing')
+    handleModeChange('add_existing')
+    goToStep('2')
   }
 
   const handleCreatePackage = async () => {
@@ -206,169 +221,209 @@ export default function ImportPage() {
 
   return (
     <div className="stack">
-      <SectionCard title="Import Bid Package">
-        <div className="import-mode-tabs" role="tablist" aria-label="Import mode">
-          <button
-            className={`import-mode-tab ${importMode === 'create_new' ? 'active' : ''}`}
-            type="button"
-            role="tab"
-            aria-selected={importMode === 'create_new'}
-            onClick={() => handleModeChange('create_new')}
-          >
-            Create New Bid Package
-          </button>
-          <button
-            className={`import-mode-tab ${importMode === 'add_existing' ? 'active' : ''}`}
-            type="button"
-            role="tab"
-            aria-selected={importMode === 'add_existing'}
-            onClick={() => handleModeChange('add_existing')}
-          >
-            Add to Existing Bid Package
-          </button>
-        </div>
+      {currentStep === '1' ? (
+        <div className="import-step-shell">
+          <SectionCard className="section-card-flat">
+            <div className="import-step2-modal">
+              <h3 className="import-step2-title">Import Specs to Bid Package</h3>
 
-        <div className="form-grid">
-          <label>
-            Project Name
-            <select
-              value={selectedProjectId}
-              onChange={(event) => setSelectedProjectId(event.target.value)}
-              disabled={loadingProjects}
-            >
-              {projects.length === 0 ? <option value="">No projects yet</option> : null}
-              {projects.map((project) => (
-                <option key={project.id} value={project.id}>{project.name}</option>
-              ))}
-            </select>
-          </label>
-          {importMode === 'create_new' ? (
-            <>
-              <label>
-                Bid Package Name
-                <input value={packageName} onChange={(event) => setPackageName(event.target.value)} placeholder="Furniture Package A" />
+              <label className="dropzone">
+                <input type="file" accept=".csv,text/csv" onChange={handleFilePick} style={{ display: 'none' }} />
+                {selectedFile ? `Selected: ${selectedFile.name}` : 'Choose CSV file'}
               </label>
-              <label>
-                Visibility
-                <select value={visibility} onChange={(event) => setVisibility(event.target.value)}>
-                  <option value="private">Private</option>
-                  <option value="public">Public</option>
-                </select>
-              </label>
-              <label>
-                Instructions
-                <textarea
-                  value={instructions}
-                  onChange={(event) => setInstructions(event.target.value)}
-                  rows={3}
-                  placeholder="Optional bidder instructions"
-                />
-              </label>
-            </>
-          ) : (
-            <label>
-              Existing Bid Package
-              <select
-                value={selectedExistingPackageId}
-                onChange={(event) => setSelectedExistingPackageId(event.target.value)}
-                disabled={!selectedProjectId || filteredExistingPackages.length === 0}
-              >
-                {filteredExistingPackages.length === 0 ? <option value="">No bid packages for this project</option> : null}
-                {filteredExistingPackages.map((pkg) => (
-                  <option key={pkg.id} value={pkg.id}>{pkg.name}</option>
+
+              <div className="action-row" style={{ marginBottom: '0.75rem' }}>
+                <button className="btn" onClick={handlePreview} disabled={!canPreview || loading}>Preview Products</button>
+                <button className="btn btn-primary" onClick={handleGoToStep2} disabled={!canProceedToStep2 || loading}>
+                  Next
+                </button>
+              </div>
+
+              {statusMessage ? <p className="text-muted">{statusMessage}</p> : null}
+              {previewErrors.length > 0 ? (
+                <div className="error-box">
+                  <strong>Validation Errors</strong>
+                  <ul>
+                    {previewErrors.slice(0, 25).map((error) => (
+                      <li key={error}>{error}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Preview Rows">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Code/Tag</th>
+                  <th>Product</th>
+                  <th>Brand</th>
+                  <th>Category</th>
+                  <th>Qty/UOM</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(previewResult?.sample_rows || []).map((row, index) => (
+                  <tr key={`${row.spec_item_id || row.sku || 'row'}-${index}`}>
+                    <td>{row.sku || '—'}</td>
+                    <td>{row.product_name || '—'}</td>
+                    <td>{row.manufacturer || '—'}</td>
+                    <td>{row.category || '—'}</td>
+                    <td>
+                      {row.quantity || '—'} {row.uom || ''}
+                    </td>
+                  </tr>
                 ))}
-              </select>
-            </label>
-          )}
+                {(previewResult?.sample_rows || []).length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="text-muted">Run preview to view parsed rows.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </SectionCard>
         </div>
+      ) : (
+        <div className="import-step-shell">
+          <SectionCard className="section-card-flat">
+            {!canProceedToStep2 ? (
+              <>
+                <p className="text-muted">No preview is available yet. Go back to Step 1 and preview products first.</p>
+                <div className="action-row">
+                  <button type="button" className="btn" onClick={() => goToStep('1')}>Back to Step 1</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="import-step2-modal">
+                <button
+                  type="button"
+                  className="import-step2-close"
+                  onClick={() => goToStep('1')}
+                  aria-label="Close and go back"
+                >
+                  ×
+                </button>
 
-        {importMode === 'create_new' ? (
-          <div className="checkbox-grid">
-            <p className="text-muted" style={{ margin: 0 }}>Include General Pricing Fields</p>
-            {GENERAL_PRICING_FIELDS.map((field) => (
-              <label key={field.key} className="checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={activeGeneralFields.includes(field.key)}
-                  onChange={(event) => {
-                    setActiveGeneralFields((prev) => {
-                      if (event.target.checked) return [...prev, field.key]
-                      return prev.filter((key) => key !== field.key)
-                    })
-                  }}
-                />
-                {field.label}
-              </label>
-            ))}
-          </div>
-        ) : null}
+                {step2View === 'existing' ? (
+                  <>
+                    <h3 className="import-step2-title">Add to Bid Package</h3>
 
-        <label className="dropzone">
-          <input type="file" accept=".csv,text/csv" onChange={handleFilePick} style={{ display: 'none' }} />
-          {selectedFile ? `Selected: ${selectedFile.name}` : 'Choose CSV file'}
-        </label>
+                    <div className="form-grid import-step2-form-grid">
+                      <label>
+                        Add to existing Bid Package
+                        <select
+                          value={selectedExistingPackageId}
+                          onChange={(event) => setSelectedExistingPackageId(event.target.value)}
+                          disabled={!selectedProjectId || filteredExistingPackages.length === 0}
+                        >
+                          {filteredExistingPackages.length === 0 ? <option value="">No bid packages for this project</option> : null}
+                          {filteredExistingPackages.map((pkg) => (
+                            <option key={pkg.id} value={pkg.id}>{pkg.name}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
 
-        <div className="action-row" style={{ marginBottom: '0.75rem' }}>
-          <button className="btn" onClick={handlePreview} disabled={!canPreview || loading}>Preview CSV</button>
-          {importMode === 'create_new' ? (
-            <button className="btn btn-primary" onClick={handleCreatePackage} disabled={!canCreate || loading}>
-              Create Bid Package
-            </button>
-          ) : (
-            <button className="btn btn-primary" onClick={handleAddToExistingPackage} disabled={!canAddToExisting || loading}>
-              Add to Existing Package
-            </button>
-          )}
+                    <p className="import-step2-switch-copy">
+                      Or{' '}
+                      <button
+                        type="button"
+                        className="import-step2-switch"
+                        onClick={() => {
+                          setStep2View('create_new')
+                          handleModeChange('create_new')
+                        }}
+                      >
+                        Create New Bid Package
+                      </button>
+                    </p>
+
+                    <div className="action-row import-step2-actions">
+                      <button className="btn btn-primary import-step2-primary" onClick={handleAddToExistingPackage} disabled={!canAddToExisting || loading}>
+                        Add to Bid Package
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <h3 className="import-step2-title">Create New Bid Package</h3>
+                    <p className="text-muted import-step2-subtitle">
+                      We&apos;ll create a bid package based on the <strong>{previewResult?.row_count || 0} specs</strong> you&apos;ve selected in this project.
+                    </p>
+
+                    <div className="form-grid import-step2-form-grid import-step2-create-top-fields">
+                      <label>
+                        Package Name
+                        <input value={packageName} onChange={(event) => setPackageName(event.target.value)} placeholder="e.g. BlueBird HQ - Phase 1 Bid" />
+                      </label>
+                      <label className="import-private-switch">
+                        <span>Private</span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={visibility === 'private'}
+                          className={`import-private-switch-toggle ${visibility === 'private' ? 'is-on' : ''}`}
+                          onClick={() => setVisibility((prev) => (prev === 'private' ? 'public' : 'private'))}
+                        >
+                          <span className="import-private-switch-thumb" />
+                        </button>
+                      </label>
+                    </div>
+
+                    <div className="import-step2-pricing-group">
+                      <p className="text-muted import-step2-pricing-title" style={{ margin: 0 }}>General Pricing Fields</p>
+                      <div className="checkbox-grid import-step2-checkbox-grid">
+                        {GENERAL_PRICING_FIELDS.map((field) => (
+                          <label key={field.key} className="checkbox-row">
+                            <input
+                              type="checkbox"
+                              checked={activeGeneralFields.includes(field.key)}
+                              onChange={(event) => {
+                                setActiveGeneralFields((prev) => {
+                                  if (event.target.checked) return [...prev, field.key]
+                                  return prev.filter((key) => key !== field.key)
+                                })
+                              }}
+                            />
+                            {field.label}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="form-grid import-step2-form-grid">
+                      <label>
+                        Instructions
+                        <textarea
+                          value={instructions}
+                          onChange={(event) => setInstructions(event.target.value)}
+                          rows={3}
+                          placeholder="Optional bidder instructions..."
+                        />
+                      </label>
+                    </div>
+
+                    <div className="action-row import-step2-actions">
+                      <button className="btn btn-primary import-step2-primary" onClick={handleCreatePackage} disabled={!canCreate || loading}>
+                        Create Bid Package
+                      </button>
+                    </div>
+                  </>
+                )}
+                </div>
+
+                {statusMessage ? <p className="text-muted">{statusMessage}</p> : null}
+                {createResult ? (
+                  <p className="text-muted">Updated Package #{createResult.bid_package.id}</p>
+                ) : null}
+              </>
+            )}
+          </SectionCard>
         </div>
-
-        {statusMessage ? <p className="text-muted">{statusMessage}</p> : null}
-        {createResult ? (
-          <p className="text-muted">Created Package #{createResult.bid_package.id}</p>
-        ) : null}
-
-        {previewErrors.length > 0 ? (
-          <div className="error-box">
-            <strong>Validation Errors</strong>
-            <ul>
-              {previewErrors.slice(0, 25).map((error) => (
-                <li key={error}>{error}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-      </SectionCard>
-
-      <SectionCard title="Preview Rows">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Code/Tag</th>
-              <th>Product</th>
-              <th>Brand</th>
-              <th>Category</th>
-              <th>Qty/UOM</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(previewResult?.sample_rows || []).map((row, index) => (
-              <tr key={`${row.spec_item_id || row.sku || 'row'}-${index}`}>
-                <td>{row.sku || '—'}</td>
-                <td>{row.product_name || '—'}</td>
-                <td>{row.manufacturer || '—'}</td>
-                <td>{row.category || '—'}</td>
-                <td>
-                  {row.quantity || '—'} {row.uom || ''}
-                </td>
-              </tr>
-            ))}
-            {(previewResult?.sample_rows || []).length === 0 ? (
-              <tr>
-                <td colSpan={5} className="text-muted">Run preview to view parsed rows.</td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </SectionCard>
+      )}
     </div>
   )
 }

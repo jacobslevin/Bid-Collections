@@ -1309,8 +1309,8 @@ export default function ComparisonPage({
   )
   const requirementsColumnsMinWidth = (effectiveRequiredApprovalColumns.length * 120) + (hasFilesColumn ? 110 : 0)
   const tableMinWidth = baseTableMinWidth + (visibleDealers.length * perDealerMinWidth) + requirementsColumnsMinWidth + 40
-  const shouldPinCodeColumn = tableScrollLeft > 140
-  const shouldHideAwardActions = isAwardedWorkspace || tableScrollTop > 8
+  const shouldPinCodeColumn = historyModeActive || tableScrollLeft > 140
+  const shouldHideAwardActions = isAwardedWorkspace || historyModeActive || tableScrollTop > 8
   const showDealerGroupHeader = !isAwardedWorkspace && visibleDealers.length > 0
   const sparseNoBidderLayout = visibleDealers.length === 0 && !isAwardedWorkspace
   const sparseColumnPercents = useMemo(() => {
@@ -1671,7 +1671,7 @@ export default function ComparisonPage({
         >
         <div className="comparison-table-inner" ref={tableInnerRef}>
         <table
-          className={`table comparison-table ${shouldPinCodeColumn ? 'pin-code-column' : ''} ${shouldHideAwardActions ? 'hide-award-actions' : ''} ${!showDealerGroupHeader ? 'single-header' : ''} ${sparseNoBidderLayout ? 'comparison-table-sparse' : ''}`.trim()}
+          className={`table comparison-table sticky-code-column ${historyModeActive ? 'history-mode' : ''} ${showUseColumn ? 'has-use-column' : ''} ${shouldPinCodeColumn ? 'pin-code-column' : ''} ${shouldHideAwardActions ? 'hide-award-actions' : ''} ${!showDealerGroupHeader ? 'single-header' : ''} ${sparseNoBidderLayout ? 'comparison-table-sparse' : ''}`.trim()}
           style={{ width: '100%', minWidth: `${tableMinWidth}px` }}
         >
           {sparseNoBidderLayout ? (
@@ -1689,9 +1689,9 @@ export default function ComparisonPage({
                     (() => {
                       const status = selectionStatusForDealer(dealer, awardedBidId)
                       const isAwarded = status === 'awarded'
-                      const canAward = !awardedBidId && Boolean(dealer.bid_id)
-                      const canChangeAward = Boolean(awardedBidId) && !isAwarded && Boolean(dealer.bid_id)
-                      const canClearAward = Boolean(awardedBidId) && isAwarded
+                      const canAward = !historyModeActive && !awardedBidId && Boolean(dealer.bid_id)
+                      const canChangeAward = !historyModeActive && Boolean(awardedBidId) && !isAwarded && Boolean(dealer.bid_id)
+                      const canClearAward = !historyModeActive && Boolean(awardedBidId) && isAwarded
                       return (
                         <th
                           key={`group-${dealer.invite_id}`}
@@ -1705,9 +1705,7 @@ export default function ComparisonPage({
                                   type="button"
                                   className="btn btn-primary btn-award"
                                   onClick={() => openAwardModal('award', dealer)}
-                                  disabled={loading || awardSaving || historyModeActive}
-                                  title={historyModeActive ? 'Exit history view to award bids' : undefined}
-                                  style={historyModeActive ? { opacity: 0.5, cursor: 'not-allowed', pointerEvents: 'none' } : undefined}
+                                  disabled={loading || awardSaving}
                                 >
                                   Award
                                 </button>
@@ -1717,9 +1715,7 @@ export default function ComparisonPage({
                                   type="button"
                                   className="btn btn-award-change"
                                   onClick={() => openAwardModal('change', dealer)}
-                                  disabled={loading || awardSaving || historyModeActive}
-                                  title={historyModeActive ? 'Exit history view to award bids' : undefined}
-                                  style={historyModeActive ? { opacity: 0.5, cursor: 'not-allowed', pointerEvents: 'none' } : undefined}
+                                  disabled={loading || awardSaving}
                                 >
                                   Change Award
                                 </button>
@@ -1729,9 +1725,7 @@ export default function ComparisonPage({
                                   type="button"
                                   className="btn btn-award-change"
                                   onClick={() => openAwardModal('clear', dealer)}
-                                  disabled={loading || awardSaving || historyModeActive}
-                                  title={historyModeActive ? 'Exit history view to award bids' : undefined}
-                                  style={historyModeActive ? { opacity: 0.5, cursor: 'not-allowed', pointerEvents: 'none' } : undefined}
+                                  disabled={loading || awardSaving}
                                 >
                                   Remove Award
                                 </button>

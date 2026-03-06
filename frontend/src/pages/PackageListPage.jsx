@@ -28,6 +28,25 @@ function packageDisplayName(pkg) {
   return packageName || 'Untitled Bid Package'
 }
 
+function EyeGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M1.5 8s2.2-3.5 6.5-3.5S14.5 8 14.5 8s-2.2 3.5-6.5 3.5S1.5 8 1.5 8Z" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <circle cx="8" cy="8" r="1.9" fill="none" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  )
+}
+
+function EyeOffGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M1.5 8s2.2-3.5 6.5-3.5S14.5 8 14.5 8s-2.2 3.5-6.5 3.5S1.5 8 1.5 8Z" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <circle cx="8" cy="8" r="1.9" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M3 13L13 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 export default function PackageListPage() {
   const navigate = useNavigate()
   const [packages, setPackages] = useState([])
@@ -103,6 +122,18 @@ export default function PackageListPage() {
     }
   }
 
+  const copyPublicPackageUrl = async (pkg) => {
+    const relativeUrl = pkg?.public_url
+    if (!relativeUrl) return
+    const absoluteUrl = `${window.location.origin}${relativeUrl}`
+    try {
+      await navigator.clipboard.writeText(absoluteUrl)
+      setStatusMessage(`Public URL copied for "${packageDisplayName(pkg)}".`)
+    } catch (_error) {
+      setStatusMessage('Unable to copy URL in this browser.')
+    }
+  }
+
   return (
     <div className="stack">
       <SectionCard className="section-card-flat bidders-flat">
@@ -120,10 +151,24 @@ export default function PackageListPage() {
                 <div className="package-list-left">
                   <div className="package-list-card-meta">
                     <span className={`package-status-dot ${pkg.awarded_bid_id ? 'is-awarded' : 'is-progress'}`} />
-                    <span>{packageStatusLabel(pkg)}</span>
+                    <span className={`package-status-label ${pkg.awarded_bid_id ? 'is-awarded' : 'is-progress'}`}>{packageStatusLabel(pkg)}</span>
                   </div>
                   <div className="package-list-title-wrap">
-                    <span className="package-list-title-icon" aria-hidden="true">◌</span>
+                    {pkg.visibility === 'public' ? (
+                      <button
+                        type="button"
+                        className="package-visibility-btn"
+                        onClick={() => copyPublicPackageUrl(pkg)}
+                        title="Copy public URL"
+                        aria-label={`Copy public URL for ${packageDisplayName(pkg)}`}
+                      >
+                        <EyeGlyph />
+                      </button>
+                    ) : (
+                      <span className="package-visibility-indicator" title="Private package" aria-label="Private package">
+                        <EyeOffGlyph />
+                      </span>
+                    )}
                     <div className="package-list-card-title">{packageDisplayName(pkg)}</div>
                   </div>
                 </div>
@@ -132,8 +177,24 @@ export default function PackageListPage() {
                     {`Created on ${formatCreatedDate(pkg.created_at || pkg.imported_at)} • ${pkg.spec_item_count ?? 0} Specs • ${pkg.invite_count ?? 0} Bidders`}
                   </div>
                   <div className="package-list-card-actions">
-                    <button className="btn package-list-edit-btn" onClick={() => startEdit(pkg)} disabled={loading} title="Edit package">✎</button>
-                    <button className="btn btn-primary package-list-view-btn" onClick={() => navigate(`/package/${pkg.id}`)} disabled={loading}>View</button>
+                    <button
+                      className="btn package-list-edit-btn"
+                      onClick={() => startEdit(pkg)}
+                      disabled={loading || editingId === pkg.id}
+                      title="Edit package"
+                      aria-label={`Edit ${packageDisplayName(pkg)}`}
+                    >
+                      <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                        <path d="M2.4 11.5v2.1h2.1l7-7-2.1-2.1-7 7Zm1.1 1v-.6l5.9-5.9.6.6-5.9 5.9h-.6Zm8.7-6.6 1.1-1.1c.2-.2.2-.5 0-.7l-1.2-1.2c-.2-.2-.5-.2-.7 0L10.3 4l1.9 1.9Z" fill="currentColor" />
+                      </svg>
+                    </button>
+                    <button
+                      className="btn btn-primary package-list-view-btn"
+                      onClick={() => navigate(`/package/${pkg.id}`)}
+                      disabled={loading || editingId === pkg.id}
+                    >
+                      View
+                    </button>
                   </div>
                 </div>
               </div>
@@ -184,7 +245,7 @@ export default function PackageListPage() {
                   <div className="action-row package-list-edit-actions">
                     <button className="btn btn-primary" onClick={saveEdit} disabled={loading || !draft.name.trim()}>Save</button>
                     <button className="btn" onClick={() => setEditingId(null)} disabled={loading}>Cancel</button>
-                    <button className="btn btn-danger" onClick={() => removePackage(pkg)} disabled={loading}>Delete</button>
+                    <button className="btn btn-danger package-list-delete-btn" onClick={() => removePackage(pkg)} disabled={loading}>Delete Bid Package</button>
                   </div>
                 </div>
               ) : null}

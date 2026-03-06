@@ -12,8 +12,7 @@ import PublicBidPackagePage from './pages/PublicBidPackagePage'
 
 const utilityNavItems = [
   { to: '/vendors', label: 'Vendors' },
-  { to: '/projects', label: 'Projects' },
-  { to: '/import', label: 'Import Package' }
+  { to: '/projects', label: 'Projects' }
 ]
 
 export default function App() {
@@ -37,6 +36,9 @@ export default function App() {
             <h1>Bid Collections</h1>
           </div>
           <nav className="topnav topnav-management">
+            <NavLink to="/import" className={({ isActive }) => (isActive ? 'active' : '')}>
+              Import Package
+            </NavLink>
             <NavLink to="/package" className={({ isActive }) => (isActive ? 'active' : '')}>
               Bid Management
             </NavLink>

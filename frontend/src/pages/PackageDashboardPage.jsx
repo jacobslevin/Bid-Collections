@@ -647,7 +647,7 @@ export default function PackageDashboardPage() {
     setHistoryView({
       bidderId: Number(historyInviteId) || 0,
       version: Number(version?.version_number) || 0,
-      dealerName: String(historyData?.dealer_name || 'Unknown Vendor'),
+      dealerName: vendorDisplayName(String(historyData?.dealer_name || 'Unknown Vendor')),
       date: isValidDate ? submittedAt.toLocaleDateString() : '—',
       time: isValidDate ? submittedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—'
     })
@@ -1101,9 +1101,11 @@ export default function PackageDashboardPage() {
 
   const postAwardActive = Boolean(loadedPackageSettings?.awarded_bid_id)
   const approvalTrackingActive = Boolean(postAwardActive || approvalsOnlyMode)
+  const showEmptyBiddersState = !postAwardActive && !approvalsOnlyMode && rows.length === 0
   const currentAwardedBidIdStr = loadedPackageSettings?.awarded_bid_id != null
     ? String(loadedPackageSettings.awarded_bid_id)
     : null
+  const visibilityIsPublic = loadedPackageSettings?.visibility === 'public' && Boolean(loadedPackageSettings?.public_url)
   const visibleInviteRows = useMemo(() => {
     if (!postAwardActive || !currentAwardedBidIdStr || showAllAwardedBidders) return rows
     return rows.filter((row) => row.bid_id != null && String(row.bid_id) === currentAwardedBidIdStr)
@@ -1271,6 +1273,7 @@ export default function PackageDashboardPage() {
     if (lineItemFilterRequirementKey === 'untagged') return uploads.filter((upload) => !upload.requirement_key)
     return uploads.filter((upload) => String(upload.requirement_key || '') === String(lineItemFilterRequirementKey))
   }, [activeLineItemFilesModal, lineItemFilterRequirementKey])
+  const noFilesInActiveModal = filteredActiveModalUploads.length === 0
   const paginatedSpecItems = sortedSpecItems.slice(
     (lineItemsPage - 1) * normalizedLineItemsPerPage,
     lineItemsPage * normalizedLineItemsPerPage
@@ -1311,22 +1314,32 @@ export default function PackageDashboardPage() {
         >
           ‹ All Packages
         </button>
-        <h1 className="package-detail-title">{packageHeaderTitle}</h1>
-        {loadedPackageSettings?.visibility === 'public' && loadedPackageSettings?.public_url ? (
-          <div className="public-url-inline">
-            <span className="text-muted">Public URL:</span>
-            <a
-              href={`${window.location.origin}${loadedPackageSettings.public_url}`}
-              target="_blank"
-              rel="noreferrer"
+        <div className="package-detail-title-row">
+          {visibilityIsPublic ? (
+            <button
+              type="button"
+              className="package-visibility-icon-btn"
+              onClick={copyPublicUrl}
+              disabled={loading}
+              title={copiedPublicUrl ? 'Copied public URL' : 'Copy public URL'}
+              aria-label={copiedPublicUrl ? 'Public URL copied' : 'Copy public URL'}
             >
-              <code>{`${window.location.origin}${loadedPackageSettings.public_url}`}</code>
-            </a>
-            <button className="btn" onClick={copyPublicUrl} disabled={loading}>
-              {copiedPublicUrl ? 'Copied' : 'Copy'}
+              <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path d="M1.5 8s2.2-3.5 6.5-3.5S14.5 8 14.5 8s-2.2 3.5-6.5 3.5S1.5 8 1.5 8Z" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                <circle cx="8" cy="8" r="1.9" fill="none" stroke="currentColor" strokeWidth="1.5" />
+              </svg>
             </button>
-          </div>
-        ) : null}
+          ) : (
+            <span className="package-visibility-icon-static" aria-label="Private package" title="Private package">
+              <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path d="M1.5 8s2.2-3.5 6.5-3.5S14.5 8 14.5 8s-2.2 3.5-6.5 3.5S1.5 8 1.5 8Z" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                <circle cx="8" cy="8" r="1.9" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M3 13L13 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </span>
+          )}
+          <h1 className="package-detail-title">{packageHeaderTitle}</h1>
+        </div>
         {statusMessage ? <p className="text-muted">{statusMessage}</p> : null}
       </SectionCard>
 
@@ -1335,7 +1348,7 @@ export default function PackageDashboardPage() {
         <div style={{ maxWidth: '985px' }}>
           <div className="bidders-head-row">
             <h2>{biddersSectionTitle}</h2>
-            {!postAwardActive && !approvalsOnlyMode ? (
+            {!postAwardActive && !approvalsOnlyMode && !showEmptyBiddersState ? (
               <div className="bidders-head-actions">
                 <label className="bidders-sort-control">
                   <span className="bidders-sort-label">Sort by:</span>
@@ -1486,15 +1499,17 @@ export default function PackageDashboardPage() {
                     </td>
                     <td>
                       {postAwardActive && effectiveSelectionStatus === 'awarded' ? (
-                        <div className="bidder-status-cell">
+                        <div className="bidder-status-cell bidder-status-cell-awarded">
+                          <span className="bidder-status-chip-awarded">Awarded</span>
                           <button
                             type="button"
-                            className="bidder-status-main status-tone-submitted"
-                            title="Click to remove award"
+                            className="bidder-status-unaward-btn"
+                            title="Remove award"
                             onClick={() => openClearAwardModal(row)}
                             disabled={loading}
+                            aria-label="Remove award"
                           >
-                            Awarded
+                            ×
                           </button>
                         </div>
                       ) : null}
@@ -1699,15 +1714,19 @@ export default function PackageDashboardPage() {
               })}
               {sortedInviteRows.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="text-muted">
-                    {postAwardActive ? 'No awarded bidder found.' : 'No invite rows loaded yet.'}
+                  <td colSpan={5} className={`text-muted ${showEmptyBiddersState ? 'bidders-empty-copy' : ''}`.trim()}>
+                    {postAwardActive
+                      ? 'No awarded bidder found.'
+                      : showEmptyBiddersState
+                        ? 'No bidders yet. Add your first bidder using the module below or skip to approvals if you outsource project bidding.'
+                        : 'No invite rows loaded yet.'}
                   </td>
                 </tr>
               ) : null}
             </tbody>
           </table>
         </div>
-        <div className="action-row bidders-footer-actions">
+        <div className={`action-row bidders-footer-actions ${showEmptyBiddersState ? 'bidders-footer-empty' : ''}`.trim()}>
           {postAwardActive && rows.length > 1 ? (
             <button
               className="btn btn-primary"
@@ -1755,7 +1774,7 @@ export default function PackageDashboardPage() {
               </button>
             </div>
           ) : null}
-          {!postAwardActive && !showAddBidderForm ? (
+          {!postAwardActive && !showAddBidderForm && !showEmptyBiddersState ? (
             <button
               className="btn bidder-add-link-btn"
               onClick={() => setShowAddBidderForm(true)}
@@ -1765,14 +1784,46 @@ export default function PackageDashboardPage() {
               <span>Bidder</span>
             </button>
           ) : null}
-          {!postAwardActive && !showAddBidderForm && rows.length === 0 && !approvalsOnlyMode ? (
-            <button
-              className="btn"
-              onClick={enableApprovalsOnlyMode}
-              disabled={!loadedBidPackageId || loading}
-            >
-              Skip to Approvals
-            </button>
+          {showEmptyBiddersState ? (
+            <>
+              <div className="bidder-add-head-inline bidders-empty-inline">
+                <select
+                  className="bidder-add-head-input bidder-add-head-select"
+                  value={selectedVendorKey}
+                  onChange={(event) => onVendorChange(event.target.value)}
+                  disabled={loading}
+                >
+                  <option value="">Select Vendor</option>
+                  {vendorOptions.map((option) => (
+                    <option key={option.key} value={option.key}>{option.label}</option>
+                  ))}
+                </select>
+                <input
+                  className="bidder-add-head-input bidder-add-head-password"
+                  type="text"
+                  value={invitePassword}
+                  onChange={(event) => setInvitePassword(event.target.value)}
+                  placeholder="Password"
+                  disabled={loading}
+                />
+                <button
+                  className="btn bidder-add-submit-btn"
+                  onClick={addInvite}
+                  disabled={loading || !dealerName.trim() || !invitePassword || !loadedBidPackageId}
+                  title="Add bidder"
+                  aria-label="Add bidder"
+                >
+                  +
+                </button>
+              </div>
+              <button
+                className="btn bidders-empty-skip-btn"
+                onClick={enableApprovalsOnlyMode}
+                disabled={!loadedBidPackageId || loading}
+              >
+                Skip to approvals ➜
+              </button>
+            </>
           ) : null}
         </div>
       </SectionCard>
@@ -1782,11 +1833,13 @@ export default function PackageDashboardPage() {
           {historyView ? (
             <div className="comparison-history-banner">
               <div className="comparison-history-banner-left">
-                <span className="comparison-history-banner-icon" aria-hidden="true">📋</span>
+                <span className="comparison-history-banner-icon" aria-hidden="true">⚠</span>
                 <div className="comparison-history-banner-content">
                   <p className="comparison-history-banner-title">Viewing Historical Bid</p>
-                  <p className="comparison-history-banner-details">{`${historyView.dealerName} - Version ${historyView.version} (${historyView.date} at ${historyView.time})`}</p>
-                  <p className="comparison-history-banner-subtext">You cannot award a bid while in history mode.</p>
+                  <p className="comparison-history-banner-details">
+                    {`${vendorDisplayName(historyView.dealerName)} - Version ${historyView.version} (${historyView.date} at ${historyView.time}) `}
+                    <span className="comparison-history-banner-warning">You cannot award a bid while in history mode.</span>
+                  </p>
                 </div>
               </div>
               <button type="button" className="btn comparison-history-exit-btn" onClick={() => setHistoryView(null)}>
@@ -1849,11 +1902,11 @@ export default function PackageDashboardPage() {
           setLineItemDownloadIncludeTag(false)
           setLineItemDownloadIncludeCode(false)
         }}>
-          <div className="modal-card file-room-modal-card" onClick={(event) => event.stopPropagation()}>
+          <div className={`modal-card file-room-modal-card ${noFilesInActiveModal ? 'is-empty' : ''}`.trim()} onClick={(event) => event.stopPropagation()}>
             <div className="section-head">
-              <h2>{`Files · ${activeLineItemFilesModal.codeTag}`}</h2>
+              <h2>{activeLineItemFilesModal.codeTag}</h2>
               <button
-                className="btn"
+                className="btn designer-file-room-close-btn"
                 onClick={() => {
                   setActiveLineItemFilesModal(null)
                   setLineItemUploadFile(null)
@@ -1871,147 +1924,139 @@ export default function PackageDashboardPage() {
                 ? `${activeLineItemFilesModal.productName} by ${activeLineItemFilesModal.brandName}`
                 : activeLineItemFilesModal.productName}
             </p>
-            <div className="designer-file-room-dropzone">
+            <div className={`designer-file-room-dropzone ${noFilesInActiveModal ? 'is-empty' : ''}`.trim()}>
               <div className="designer-file-room-upload-icon">⇪</div>
-              <div className="designer-file-room-drop-copy">Drag and drop files here, or click to browse</div>
-              {activeModalRequirementOptions.length > 0 ? (
-                <label className="designer-file-room-tag-select">
-                  <span>Requirement Tag (optional)</span>
-                  <select
-                    value={lineItemUploadRequirementKey}
-                    onChange={(event) => setLineItemUploadRequirementKey(event.target.value)}
+              <div className={`designer-file-room-drop-copy ${noFilesInActiveModal ? 'is-empty' : ''}`.trim()}>
+                Drag &amp; drop files here or click to{' '}
+                <label className="designer-file-room-browse-link">
+                  browse
+                  <input
+                    type="file"
+                    style={{ display: 'none' }}
                     disabled={loading}
-                  >
-                    <option value="">None</option>
-                    {activeModalRequirementOptions.map((option) => (
-                      <option key={`upload-requirement-${option.key}`} value={option.key}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-              <label className="btn btn-primary designer-file-room-select-btn">
-                Select Files
-                <input
-                  type="file"
-                  style={{ display: 'none' }}
-                  disabled={loading}
-                  onChange={async (event) => {
-                    const file = event.target.files?.[0] || null
-                    setLineItemUploadFile(file)
-                    if (file) await uploadLineItemFile(file)
-                    event.target.value = ''
-                  }}
-                />
-              </label>
-            </div>
-            {activeModalRequirementOptions.length > 0 ? (
-              <div className="designer-file-room-filter-row">
-                <span>Filter:</span>
-                <select
-                  value={lineItemFilterRequirementKey}
-                  onChange={(event) => setLineItemFilterRequirementKey(event.target.value)}
-                >
-                  <option value="all">All files</option>
-                  <option value="untagged">Untagged</option>
-                  {activeModalRequirementOptions.map((option) => (
-                    <option key={`filter-requirement-${option.key}`} value={option.key}>{option.label}</option>
-                  ))}
-                </select>
-              </div>
-            ) : null}
-            <div className="designer-file-room-bulk-actions">
-              <div className="designer-file-room-download-options">
-                <label className="checkbox-row designer-file-room-download-toggle">
-                  <input
-                    type="checkbox"
-                    checked={lineItemDownloadIncludeCode}
-                    onChange={(event) => setLineItemDownloadIncludeCode(event.target.checked)}
+                    onChange={async (event) => {
+                      const file = event.target.files?.[0] || null
+                      setLineItemUploadFile(file)
+                      if (file) await uploadLineItemFile(file)
+                      event.target.value = ''
+                    }}
                   />
-                  Include code/tag in filenames
-                </label>
-                <label className="checkbox-row designer-file-room-download-toggle">
-                  <input
-                    type="checkbox"
-                    checked={lineItemDownloadIncludeTag}
-                    onChange={(event) => setLineItemDownloadIncludeTag(event.target.checked)}
-                  />
-                  Include requirement tag in filenames
                 </label>
               </div>
-              <button
-                type="button"
-                className="btn"
-                onClick={downloadAllLineItemFiles}
-                disabled={lineItemBulkDownloading || filteredActiveModalUploads.filter((upload) => Boolean(upload?.download_url)).length === 0}
-              >
-                {lineItemBulkDownloading ? 'Downloading…' : 'Download All'}
-              </button>
             </div>
-            <div className="designer-file-room-list">
-              {filteredActiveModalUploads.map((upload) => (
-                <div key={`line-item-modal-upload-${upload.id}`} className="designer-file-room-item">
-                  <div className="designer-file-room-item-icon">📄</div>
-                  <div className="designer-file-room-item-main">
-                    <div className="designer-file-room-item-name">
-                      {upload.file_name || '—'}
-                      {upload.requirement_key ? (
-                        <span className="designer-file-room-requirement-chip">
-                          {activeModalRequirementLabelByKey[upload.requirement_key] || upload.requirement_key}
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="designer-file-room-item-meta">
-                      {[formatFileSize(upload.byte_size), upload.uploaded_by || upload.uploader_role || '—', formatShortDate(upload.uploaded_at)].filter(Boolean).join(' • ')}
-                    </div>
-                  </div>
-                  <div className="designer-file-room-item-actions">
-                    {activeModalRetagOptions.length > 0 ? (
-                      <select
-                        className="designer-file-room-item-tag-select"
-                        value={upload.requirement_key || ''}
-                        onChange={(event) => updateLineItemUploadRequirement(upload, event.target.value)}
-                        disabled={loading || lineItemSavingTagUploadId === upload.id}
-                        title="Requirement tag"
-                      >
-                        <option value="">No tag</option>
-                        {activeModalRetagOptions.map((option) => (
-                          <option key={`upload-item-tag-${upload.id}-${option.key}`} value={option.key}>{option.label}</option>
-                        ))}
-                      </select>
-                    ) : null}
-                    {upload.download_url ? (
-                      <button
-                        type="button"
-                        className="btn designer-file-room-icon-btn"
-                        onClick={async () => {
-                          try {
-                            await downloadSingleLineItemFile(upload)
-                          } catch (error) {
-                            setStatusMessage(error.message || 'Unable to download file.')
-                          }
-                        }}
-                        title="Download"
-                      >
-                        ↓
-                      </button>
-                    ) : null}
-                    {upload.uploader_role === 'designer' ? (
-                      <button
-                        className="btn designer-file-room-icon-btn danger"
-                        onClick={() => deleteLineItemFile(upload)}
-                        disabled={loading}
-                        title="Delete"
-                      >
-                        🗑
-                      </button>
-                    ) : null}
+            {!noFilesInActiveModal ? (
+              <>
+                <div className="designer-file-room-top-row">
+                  <div className="designer-file-room-files-count">{`${filteredActiveModalUploads.length} File${filteredActiveModalUploads.length === 1 ? '' : 's'}`}</div>
+                  <div className="designer-file-room-filter-row">
+                    <span>Filter</span>
+                    <select
+                      value={lineItemFilterRequirementKey}
+                      onChange={(event) => setLineItemFilterRequirementKey(event.target.value)}
+                    >
+                      <option value="all">All Files</option>
+                      <option value="untagged">Untagged</option>
+                      {activeModalRequirementOptions.map((option) => (
+                        <option key={`filter-requirement-${option.key}`} value={option.key}>{option.label}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
-              ))}
-              {filteredActiveModalUploads.length === 0 ? (
-                <div className="designer-file-room-empty text-muted">No files uploaded yet</div>
-              ) : null}
-            </div>
+                <div className="designer-file-room-bulk-actions">
+                  <div className="designer-file-room-download-options">
+                    <span className="designer-file-room-filenames-label">Filenames:</span>
+                    <label className="checkbox-row designer-file-room-download-toggle">
+                      <input
+                        type="checkbox"
+                        checked={lineItemDownloadIncludeCode}
+                        onChange={(event) => setLineItemDownloadIncludeCode(event.target.checked)}
+                      />
+                      Include code/tag
+                    </label>
+                    <label className="checkbox-row designer-file-room-download-toggle">
+                      <input
+                        type="checkbox"
+                        checked={lineItemDownloadIncludeTag}
+                        onChange={(event) => setLineItemDownloadIncludeTag(event.target.checked)}
+                      />
+                      Include Requirement type
+                    </label>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn designer-file-room-download-all-btn"
+                    onClick={downloadAllLineItemFiles}
+                    disabled={lineItemBulkDownloading || filteredActiveModalUploads.filter((upload) => Boolean(upload?.download_url)).length === 0}
+                  >
+                    {lineItemBulkDownloading ? 'Downloading…' : 'Download All'}
+                  </button>
+                </div>
+              </>
+            ) : null}
+            {!noFilesInActiveModal ? (
+              <div className="designer-file-room-list">
+                {filteredActiveModalUploads.map((upload) => (
+                  <div key={`line-item-modal-upload-${upload.id}`} className="designer-file-room-item">
+                    <div className="designer-file-room-item-icon">📄</div>
+                    <div className="designer-file-room-item-main">
+                      <div className="designer-file-room-item-name">
+                        {upload.file_name || '—'}
+                      </div>
+                      <div className="designer-file-room-item-meta">
+                        {[formatFileSize(upload.byte_size), upload.uploaded_by || upload.uploader_role || '—', formatShortDate(upload.uploaded_at)].filter(Boolean).join(' • ')}
+                      </div>
+                    </div>
+                    <div className="designer-file-room-item-actions">
+                      {activeModalRetagOptions.length > 0 ? (
+                        <select
+                          className="designer-file-room-item-tag-select"
+                          value={upload.requirement_key || ''}
+                          onChange={(event) => updateLineItemUploadRequirement(upload, event.target.value)}
+                          disabled={loading || lineItemSavingTagUploadId === upload.id}
+                          title="Requirement tag"
+                        >
+                          <option value="">No tag</option>
+                          {activeModalRetagOptions.map((option) => (
+                            <option key={`upload-item-tag-${upload.id}-${option.key}`} value={option.key}>{option.label}</option>
+                          ))}
+                        </select>
+                      ) : null}
+                      {upload.download_url ? (
+                        <button
+                          type="button"
+                          className="btn designer-file-room-icon-btn"
+                          onClick={async () => {
+                            try {
+                              await downloadSingleLineItemFile(upload)
+                            } catch (error) {
+                              setStatusMessage(error.message || 'Unable to download file.')
+                            }
+                          }}
+                          title="Download"
+                        >
+                          ↻
+                        </button>
+                      ) : null}
+                      {upload.uploader_role === 'designer' ? (
+                        <button
+                          className="btn designer-file-room-icon-btn danger"
+                          onClick={() => deleteLineItemFile(upload)}
+                          disabled={loading}
+                          title="Delete"
+                        >
+                          ×
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {noFilesInActiveModal ? (
+              <div className="designer-file-room-list">
+                <div className={`designer-file-room-empty text-muted ${noFilesInActiveModal ? 'is-empty' : ''}`.trim()}>No files uploaded yet.</div>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
