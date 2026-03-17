@@ -32,6 +32,7 @@ module Api
         render json: {
           invite_id: invite.id,
           dealer_name: invite.dealer_name,
+          dealer_email: invite.dealer_email,
           current_version: versions.maximum(:version_number) || 0,
           versions: versions.map do |version|
             {

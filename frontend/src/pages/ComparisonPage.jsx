@@ -69,7 +69,8 @@ function deltaToneClass(displayValue) {
   return ''
 }
 
-function companyName(dealerName) {
+function dealerDisplayLabel(dealerName, dealerEmail) {
+  if (dealerEmail) return String(dealerEmail).trim()
   const raw = String(dealerName || '')
   const company = raw.split(/\s[-–—]\s/, 2)[0]?.trim()
   return company || raw || 'Dealer'
@@ -1310,7 +1311,7 @@ export default function ComparisonPage({
   const requirementsColumnsMinWidth = (effectiveRequiredApprovalColumns.length * 120) + (hasFilesColumn ? 110 : 0)
   const tableMinWidth = baseTableMinWidth + (visibleDealers.length * perDealerMinWidth) + requirementsColumnsMinWidth + 40
   const shouldPinCodeColumn = historyModeActive || tableScrollLeft > 140
-  const shouldHideAwardActions = isAwardedWorkspace || historyModeActive || tableScrollTop > 8
+  const shouldHideAwardActions = isAwardedWorkspace || historyModeActive
   const showDealerGroupHeader = !isAwardedWorkspace && visibleDealers.length > 0
   const sparseNoBidderLayout = visibleDealers.length === 0 && !isAwardedWorkspace
   const sparseColumnPercents = useMemo(() => {
@@ -1373,7 +1374,7 @@ export default function ComparisonPage({
               {lineItemsHeaderActionLabel && typeof onLineItemsHeaderAction === 'function' ? (
                 <button
                   type="button"
-                  className="btn"
+                  className="btn comparison-header-action-btn"
                   onClick={onLineItemsHeaderAction}
                   disabled={lineItemsHeaderActionDisabled || loading}
                 >
@@ -1388,17 +1389,19 @@ export default function ComparisonPage({
           <div className="comparison-toolbar-left">
             <button
               type="button"
-              className="btn"
+              className="btn comparison-scroll-btn"
               onClick={() => nudgeHorizontalScroll(-520)}
               disabled={scrollMax <= 0}
+              aria-label="Scroll table left"
             >
               ←
             </button>
             <button
               type="button"
-              className="btn"
+              className="btn comparison-scroll-btn"
               onClick={() => nudgeHorizontalScroll(520)}
               disabled={scrollMax <= 0}
+              aria-label="Scroll table right"
             >
               →
             </button>
@@ -1684,7 +1687,7 @@ export default function ComparisonPage({
           <thead>
             {showDealerGroupHeader ? (
               <tr className="header-top">
-                <th colSpan={baseColumnsBeforeDealers} />
+                <th colSpan={baseColumnsBeforeDealers} className="dealer-group-spacer-head" />
                   {visibleDealers.map((dealer) => (
                     (() => {
                       const status = selectionStatusForDealer(dealer, awardedBidId)
@@ -1699,6 +1702,7 @@ export default function ComparisonPage({
                           className={`dealer-group-header dealer-block-start dealer-block-end ${awardedBidId && dealer.bid_id === awardedBidId ? 'dealer-group-awarded' : ''}`.trim()}
                         >
                           <div className="dealer-group-header-inner">
+                            <div className="dealer-group-header-name">{dealerDisplayLabel(dealer.dealer_name, dealer.dealer_email)}</div>
                             <div className="dealer-group-header-actions">
                               {canAward ? (
                                 <button
@@ -1731,7 +1735,6 @@ export default function ComparisonPage({
                                 </button>
                               ) : null}
                             </div>
-                            <div className="dealer-group-header-name">{companyName(dealer.dealer_name)}</div>
                           </div>
                         </th>
                       )
@@ -1740,7 +1743,7 @@ export default function ComparisonPage({
               </tr>
             ) : null}
             <tr className="header-bottom">
-              {showUseColumn ? <th className="use-col-head" /> : null}
+              {showUseColumn ? <th className="use-col-head">In Totals</th> : null}
               <th className="code-col-head">
                 <button className="th-sort-btn" onClick={() => cycleSort('sku')}>
                   Code/Tag{sortIndicator('sku')}
@@ -1834,8 +1837,10 @@ export default function ComparisonPage({
                         onClick={() => toggleRowIncluded(row.spec_item_id)}
                         disabled={comparisonLocked}
                         aria-label={`${rowIncluded(row) ? 'Exclude' : 'Include'} ${row.sku || row.product_name || 'line item'}`}
+                        aria-pressed={rowIncluded(row)}
+                        title={rowIncluded(row) ? 'Included in totals' : 'Excluded from totals'}
                       >
-                        {rowIncluded(row) ? '✓ In Totals' : 'Excluded'}
+                        <span className="comparison-include-thumb" aria-hidden="true" />
                       </button>
                     </div>
                   </td>
@@ -2546,26 +2551,57 @@ export default function ComparisonPage({
 
       {awardModal ? (
         <div className="modal-backdrop" onClick={closeAwardModal}>
-          <div className="modal-card award-modal-card" onClick={(event) => event.stopPropagation()}>
-            <h3>{awardModal.mode === 'clear' ? 'Confirm Remove Award' : 'Confirm Award'}</h3>
-            <p className="award-modal-copy">
-              {awardModal.mode === 'clear'
-                ? `Removing this award will return the package to bidding mode. You can lock in ${companyName(awardModal.dealer.dealer_name)} as the selected vendor again later if needed.`
-                : `Awarding this bid will lock in ${companyName(awardModal.dealer.dealer_name)} as the selected vendor and switch to approval tracking mode. You can undo this later if needed.`}
-            </p>
-            <div className="action-row">
-              <button type="button" className="btn" onClick={closeAwardModal} disabled={awardSaving}>Cancel</button>
-              <button type="button" className="btn btn-primary" onClick={submitAward} disabled={awardSaving}>
-                {awardSaving
-                  ? 'Saving...'
-                  : awardModal.mode === 'change'
-                    ? 'Award Bid'
-                    : awardModal.mode === 'clear'
-                      ? 'Remove Award'
-                      : 'Award Bid'}
+          {awardModal.mode === 'clear' ? (
+            <div className="modal-card award-modal-card award-modal-card-remove" onClick={(event) => event.stopPropagation()}>
+              <button
+                type="button"
+                className="award-modal-close-dot"
+                onClick={closeAwardModal}
+                disabled={awardSaving}
+                aria-label="Close remove award modal"
+              >
+                ×
+              </button>
+              <h3>Remove award</h3>
+              <p className="award-modal-remove-copy">
+                Removing this award will return the package to bidding mode.
+              </p>
+              <button type="button" className="btn award-modal-remove-btn" onClick={submitAward} disabled={awardSaving}>
+                {awardSaving ? 'Saving...' : 'Remove Award'}
               </button>
             </div>
-          </div>
+          ) : (
+            <div className="modal-card award-modal-card award-modal-card-compact" onClick={(event) => event.stopPropagation()}>
+              <button
+                type="button"
+                className="award-modal-close-dot"
+                onClick={closeAwardModal}
+                disabled={awardSaving}
+                aria-label="Close award modal"
+              >
+                ×
+              </button>
+              <h3>Award Bid</h3>
+              <p className="award-modal-compact-copy">You will award this bid to:</p>
+              <p className="award-modal-company-name">{dealerDisplayLabel(awardModal.dealer?.dealer_name, awardModal.dealer?.dealer_email)}</p>
+              <div className="award-modal-total-panel">
+                <div className="award-modal-total-label">Grand Total</div>
+                <div className="award-modal-total-value">
+                  {money(
+                    awardModal?.dealer?.invite_id != null
+                      ? dealerTotalsById[awardModal.dealer.invite_id]?.total
+                      : null
+                  )}
+                </div>
+                <div className="award-modal-total-meta">
+                  {`${Number(awardModal?.dealer?.bod_only_count ?? 0)} BoD • ${Number(awardModal?.dealer?.mixed_line_count ?? 0)} BoD-Sub • ${Number(awardModal?.dealer?.sub_only_count ?? 0)} Sub`}
+                </div>
+              </div>
+              <button type="button" className="btn award-modal-award-btn" onClick={submitAward} disabled={awardSaving}>
+                {awardSaving ? 'Saving...' : 'Award Bid'}
+              </button>
+            </div>
+          )}
         </div>
       ) : null}
 

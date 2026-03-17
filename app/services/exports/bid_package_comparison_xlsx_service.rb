@@ -52,7 +52,7 @@ module Exports
         dealers.each_with_index do |dealer, index|
           start_col = base_count + (index * per_dealer_count)
           end_col = start_col + per_dealer_count - 1
-          group_headers[start_col] = dealer_header_label(dealer[:dealer_name])
+          group_headers[start_col] = dealer_header_label(dealer)
           sheet.merge_cells("#{excel_col_name(start_col)}1:#{excel_col_name(end_col)}1")
         end
 
@@ -234,8 +234,11 @@ module Exports
       "#{qty}#{unit}"
     end
 
-    def dealer_header_label(dealer_name)
-      raw = dealer_name.to_s
+    def dealer_header_label(dealer)
+      email = dealer[:dealer_email].to_s.strip
+      return email if email.present?
+
+      raw = dealer[:dealer_name].to_s
       company = raw.split(/\s[-–—]\s/, 2).first.to_s.strip
       company.present? ? company : raw
     end

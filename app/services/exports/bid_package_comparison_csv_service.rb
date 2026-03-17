@@ -55,7 +55,7 @@ module Exports
       end
 
       dealers.each do |dealer|
-        label = dealer_header_label(dealer[:dealer_name])
+        label = dealer_header_label(dealer)
         headers << "#{label}_unit_price"
         headers << "#{label}_lead_time_days" if @show_lead_time
         headers << "#{label}_notes" if @show_notes
@@ -121,8 +121,11 @@ module Exports
       "#{qty}#{unit}"
     end
 
-    def dealer_header_label(dealer_name)
-      raw = dealer_name.to_s
+    def dealer_header_label(dealer)
+      email = dealer[:dealer_email].to_s.strip
+      return email if email.present?
+
+      raw = dealer[:dealer_name].to_s
       company = raw.split(/\s[-–—]\s/, 2).first.to_s.strip
       company.present? ? company : raw
     end

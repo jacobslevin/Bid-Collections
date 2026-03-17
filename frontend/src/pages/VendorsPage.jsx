@@ -1,7 +1,10 @@
+import { useMemo } from 'react'
 import SectionCard from '../components/SectionCard'
-import vendors from '../data/vendors.json'
+import { buildVendorDirectory, loadCustomVendorRecords } from '../lib/vendorDirectory'
 
 export default function VendorsPage() {
+  const vendorRecords = useMemo(() => buildVendorDirectory(loadCustomVendorRecords()), [])
+
   return (
     <div className="stack">
       <SectionCard title="Vendors">
@@ -14,11 +17,11 @@ export default function VendorsPage() {
             </tr>
           </thead>
           <tbody>
-            {vendors.map((vendor, index) => (
-              <tr key={`${vendor['Email Address'] || vendor['Contact Name'] || 'vendor'}-${index}`}>
-                <td>{vendor['Company Name'] || '—'}</td>
-                <td>{vendor['Contact Name'] || '—'}</td>
-                <td>{vendor['Email Address'] || '—'}</td>
+            {vendorRecords.map((vendor) => (
+              <tr key={vendor.id}>
+                <td>{vendor.companyName || '—'}</td>
+                <td>{vendor.contactName || (vendor.source === 'custom' ? vendor.email || '—' : '—')}</td>
+                <td>{vendor.email || '—'}</td>
               </tr>
             ))}
           </tbody>
@@ -27,4 +30,3 @@ export default function VendorsPage() {
     </div>
   )
 }
-

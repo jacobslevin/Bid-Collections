@@ -53,6 +53,7 @@ export default function PackageListPage() {
   const [loading, setLoading] = useState(false)
   const [statusMessage, setStatusMessage] = useState('')
   const [editingId, setEditingId] = useState(null)
+  const [deleteModalPackage, setDeleteModalPackage] = useState(null)
   const [draft, setDraft] = useState({
     name: '',
     visibility: 'private',
@@ -108,13 +109,13 @@ export default function PackageListPage() {
   }
 
   const removePackage = async (pkg) => {
-    const confirmed = window.confirm(`Delete bid package "${pkg.name}"?`)
-    if (!confirmed) return
+    if (!pkg?.id) return
     setLoading(true)
     setStatusMessage('Deleting package...')
     try {
       await deleteBidPackage(pkg.id)
       if (editingId === pkg.id) setEditingId(null)
+      setDeleteModalPackage(null)
       await loadPackages()
     } catch (error) {
       setStatusMessage(error.message)
@@ -245,7 +246,7 @@ export default function PackageListPage() {
                   <div className="action-row package-list-edit-actions">
                     <button className="btn btn-primary" onClick={saveEdit} disabled={loading || !draft.name.trim()}>Save</button>
                     <button className="btn" onClick={() => setEditingId(null)} disabled={loading}>Cancel</button>
-                    <button className="btn btn-danger package-list-delete-btn" onClick={() => removePackage(pkg)} disabled={loading}>Delete Bid Package</button>
+                    <button className="btn btn-danger package-list-delete-btn" onClick={() => setDeleteModalPackage(pkg)} disabled={loading}>Delete Bid Package</button>
                   </div>
                 </div>
               ) : null}
@@ -254,6 +255,35 @@ export default function PackageListPage() {
           {packages.length === 0 ? <p className="text-muted">No bid packages yet.</p> : null}
         </div>
       </SectionCard>
+
+      {deleteModalPackage ? (
+        <div className="modal-backdrop" onClick={() => setDeleteModalPackage(null)}>
+          <div className="modal-card package-delete-modal-card" onClick={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              className="package-delete-modal-close"
+              onClick={() => setDeleteModalPackage(null)}
+              aria-label="Close delete modal"
+            >
+              ×
+            </button>
+            <h3>Delete Bid Package</h3>
+            <p className="package-delete-modal-copy">
+              Are you sure you want to delete this bid package?
+              <br />
+              This action cannot be reverted.
+            </p>
+            <button
+              type="button"
+              className="btn package-delete-modal-confirm"
+              onClick={() => removePackage(deleteModalPackage)}
+              disabled={loading}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

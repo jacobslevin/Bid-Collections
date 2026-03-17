@@ -15,6 +15,7 @@ module Comparison
           bid_id: b.id,
           invite_id: b.invite_id,
           dealer_name: b.invite.dealer_name,
+          dealer_email: b.invite.dealer_email,
           selection_status: b.selection_status,
           awarded: @bid_package.awarded_bid_id == b.id,
           delivery_amount: b.delivery_amount,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import SectionCard from '../components/SectionCard'
 import ComparisonPage from './ComparisonPage'
@@ -33,7 +33,14 @@ import {
   updateBidPackage,
   updateInvitePassword
 } from '../lib/api'
-import vendors from '../data/vendors.json'
+import {
+  buildInvitePayloadFromVendor,
+  buildVendorDirectory,
+  createLocalVendorRecord,
+  findVendorByEmail,
+  loadCustomVendorRecords,
+  storeCustomVendorRecords
+} from '../lib/vendorDirectory'
 
 const GENERAL_PRICING_FIELDS = [
   { key: 'delivery_amount', label: 'Shipping' },
@@ -159,7 +166,8 @@ function fileNameWithRequirementTag(fileName, requirementLabel, codeTag, include
   })
 }
 
-function vendorDisplayName(value) {
+function vendorDisplayName(value, email) {
+  if (email) return String(email).trim()
   if (!value) return '—'
   const parts = String(value).split(' - ')
   return parts[0]?.trim() || String(value)
@@ -289,9 +297,12 @@ export default function PackageDashboardPage() {
   const [lineItemFilterRequirementKey, setLineItemFilterRequirementKey] = useState('all')
   const [lineItemDownloadIncludeTag, setLineItemDownloadIncludeTag] = useState(false)
   const [lineItemDownloadIncludeCode, setLineItemDownloadIncludeCode] = useState(false)
+  const [toastMessage, setToastMessage] = useState('')
+  const toastTimeoutRef = useRef(null)
   const [lineItemBulkDownloading, setLineItemBulkDownloading] = useState(false)
   const [lineItemSavingTagUploadId, setLineItemSavingTagUploadId] = useState(null)
   const [clearAwardModal, setClearAwardModal] = useState(null)
+  const [deleteBidderModal, setDeleteBidderModal] = useState(null)
   const [editingPasswordInviteId, setEditingPasswordInviteId] = useState(null)
   const [passwordEditDraft, setPasswordEditDraft] = useState('')
   const [savingPasswordInviteId, setSavingPasswordInviteId] = useState(null)
@@ -313,12 +324,21 @@ export default function PackageDashboardPage() {
   const [showAllAwardedBidders, setShowAllAwardedBidders] = useState(false)
   const [approvalsOnlyMode, setApprovalsOnlyMode] = useState(false)
 
-  const [dealerName, setDealerName] = useState('')
-  const [dealerEmail, setDealerEmail] = useState('')
   const [selectedVendorKey, setSelectedVendorKey] = useState('')
+  const [customVendorRecords, setCustomVendorRecords] = useState(() => loadCustomVendorRecords())
+  const [vendorPickerOpen, setVendorPickerOpen] = useState(false)
+  const [showCreateVendorPanel, setShowCreateVendorPanel] = useState(false)
+  const [createVendorStep, setCreateVendorStep] = useState('email')
+  const [createVendorDraft, setCreateVendorDraft] = useState({
+    email: '',
+    name: '',
+    phone: '',
+    inviteToHub: true
+  })
   const [invitePassword, setInvitePassword] = useState('')
   const [showAddBidderForm, setShowAddBidderForm] = useState(false)
   const [copiedPublicUrl, setCopiedPublicUrl] = useState(false)
+  const vendorPickerRef = useRef(null)
 
   const loadBidPackages = async (preserveSelectedId = true) => {
     setLoadingPackages(true)
@@ -453,11 +473,8 @@ export default function PackageDashboardPage() {
   }
 
   const addInvite = async () => {
-    const trimmedName = dealerName.trim()
-    const trimmedEmail = dealerEmail.trim()
-    const fallbackName = trimmedEmail ? trimmedEmail.split('@')[0] : ''
-    const resolvedDealerName = trimmedName || fallbackName
-    if (!loadedBidPackageId || !resolvedDealerName || !invitePassword) return
+    const invitePayload = buildInvitePayloadFromVendor(selectedVendorRecord)
+    if (!loadedBidPackageId || !invitePayload.dealerName || !invitePassword) return
 
     setLoading(true)
     setStatusMessage('Creating invite...')
@@ -466,15 +483,13 @@ export default function PackageDashboardPage() {
         storeValue(approvalsOnlyStorageKey(loadedBidPackageId), '')
       }
       setApprovalsOnlyMode(false)
-      const created = await createInvite({
+      await createInvite({
         bidPackageId: loadedBidPackageId,
-        dealerName: resolvedDealerName,
-        dealerEmail: trimmedEmail,
+        dealerName: invitePayload.dealerName,
+        dealerEmail: invitePayload.dealerEmail,
         password: invitePassword
       })
       setSelectedVendorKey('')
-      setDealerName('')
-      setDealerEmail('')
       setInvitePassword('')
       setShowAddBidderForm(false)
       setStatusMessage('Invite created. Reloading dashboard...')
@@ -486,31 +501,63 @@ export default function PackageDashboardPage() {
     }
   }
 
-  const vendorOptions = vendors.map((vendor, index) => {
-    const company = vendor['Company Name'] || 'Vendor'
-    const contact = vendor['Contact Name'] || 'Contact'
-    const email = vendor['Email Address'] || ''
-    const key = `${company}|${contact}|${email}|${index}`
-    return {
-      key,
-      dealerName: `${company} - ${contact}`,
-      dealerEmail: email,
-      label: `${company} - ${contact}${email ? ` (${email})` : ''}`
-    }
-  })
+  const vendorOptions = useMemo(() => buildVendorDirectory(customVendorRecords), [customVendorRecords])
+
+  useEffect(() => {
+    storeCustomVendorRecords(customVendorRecords)
+  }, [customVendorRecords])
 
   const onVendorChange = (value) => {
     setSelectedVendorKey(value)
-    const match = vendorOptions.find((option) => option.key === value)
-    if (!match) {
-      setDealerName('')
-      setDealerEmail('')
+    setVendorPickerOpen(false)
+    setShowCreateVendorPanel(false)
+  }
+
+  const selectedVendorOption = vendorOptions.find((option) => option.key === selectedVendorKey) || null
+  const selectedVendorRecord = selectedVendorOption || null
+
+  const createVendorAndSelect = () => {
+    const email = String(createVendorDraft.email || '').trim()
+    const name = String(createVendorDraft.name || '').trim()
+    const phone = String(createVendorDraft.phone || '').trim()
+    if (!email) {
+      setStatusMessage('Vendor email is required.')
       return
     }
 
-    setDealerName(match.dealerName)
-    setDealerEmail(match.dealerEmail)
+    const normalizedEmail = email.toLowerCase()
+    const vendorRecord = createLocalVendorRecord({
+      email: normalizedEmail,
+      name,
+      phone,
+      inviteToHub: createVendorDraft.inviteToHub
+    })
+
+    setCustomVendorRecords((prev) => {
+      const withoutMatch = prev.filter((item) => item.id !== vendorRecord.id)
+      return [vendorRecord, ...withoutMatch]
+    })
+    setSelectedVendorKey(vendorRecord.key)
+    setShowCreateVendorPanel(false)
+    setCreateVendorStep('email')
+    setVendorPickerOpen(false)
+    setCreateVendorDraft({
+      email: '',
+      name: '',
+      phone: '',
+      inviteToHub: true
+    })
   }
+
+  useEffect(() => {
+    const handlePointerDown = (event) => {
+      if (!(event.target instanceof Element)) return
+      if (vendorPickerRef.current?.contains(event.target)) return
+      setVendorPickerOpen(false)
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => document.removeEventListener('mousedown', handlePointerDown)
+  }, [])
 
   const copyInviteLink = async (row) => {
     const absoluteUrl = `${window.location.origin}${row.invite_url}`
@@ -532,7 +579,9 @@ export default function PackageDashboardPage() {
       await navigator.clipboard.writeText(absoluteUrl)
       setCopiedPublicUrl(true)
       setTimeout(() => setCopiedPublicUrl(false), 1200)
-      setStatusMessage('Public URL copied.')
+      setToastMessage('Public URL copied.')
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current)
+      toastTimeoutRef.current = setTimeout(() => setToastMessage(''), 2600)
     } catch (_error) {
       setStatusMessage('Unable to copy URL in this browser.')
     }
@@ -641,13 +690,20 @@ export default function PackageDashboardPage() {
     }
   }, [historyOpen])
 
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current)
+    }
+  }, [])
+
   const enterHistoryView = (version) => {
     const submittedAt = version?.submitted_at ? new Date(version.submitted_at) : null
     const isValidDate = submittedAt && !Number.isNaN(submittedAt.getTime())
     setHistoryView({
       bidderId: Number(historyInviteId) || 0,
       version: Number(version?.version_number) || 0,
-      dealerName: vendorDisplayName(String(historyData?.dealer_name || 'Unknown Vendor')),
+      dealerName: vendorDisplayName(String(historyData?.dealer_name || 'Unknown Vendor'), historyData?.dealer_email),
+      dealerEmail: historyData?.dealer_email || '',
       date: isValidDate ? submittedAt.toLocaleDateString() : '—',
       time: isValidDate ? submittedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—'
     })
@@ -1015,16 +1071,13 @@ export default function PackageDashboardPage() {
 
   const deleteBidderRow = async (row) => {
     if (!loadedBidPackageId) return
-    const confirmed = window.confirm(
-      `Delete ${row.dealer_name || 'this bidder'} and associated bid?\n\nThis action cannot be undone.`
-    )
-    if (!confirmed) return
 
     setLoading(true)
     setStatusMessage('Deleting bidder and bid...')
     try {
       await deleteInvite({ bidPackageId: loadedBidPackageId, inviteId: row.invite_id })
       setStatusMessage('Bidder and bid deleted.')
+      setDeleteBidderModal(null)
       await loadDashboard()
     } catch (error) {
       setStatusMessage(error.message)
@@ -1036,7 +1089,7 @@ export default function PackageDashboardPage() {
   const openClearAwardModal = (row) => {
     if (!loadedBidPackageId || !postAwardActive) return
     setClearAwardModal({
-      dealerName: vendorDisplayName(row?.dealer_name)
+      dealerName: vendorDisplayName(row?.dealer_name, row?.dealer_email)
     })
   }
 
@@ -1132,7 +1185,7 @@ export default function PackageDashboardPage() {
 
     if (biddersSort === 'vendor_asc') {
       return list.sort((a, b) => (
-        String(vendorDisplayName(a.dealer_name)).localeCompare(String(vendorDisplayName(b.dealer_name)), undefined, { sensitivity: 'base' })
+        String(vendorDisplayName(a.dealer_name, a.dealer_email)).localeCompare(String(vendorDisplayName(b.dealer_name, b.dealer_email)), undefined, { sensitivity: 'base' })
       ))
     }
     if (biddersSort === 'status') {
@@ -1235,6 +1288,152 @@ export default function PackageDashboardPage() {
     ? `Line Items (${lineItemsRangeStart}-${lineItemsRangeEnd} of ${sortedSpecItems.length})`
     : 'Line Items In Package'
   const biddersSectionTitle = `Bidders (${visibleInviteRows.length})`
+  const renderVendorPicker = () => (
+    <div className="vendor-picker" ref={vendorPickerRef}>
+      <button
+        type="button"
+        className={`bidder-add-head-input bidder-add-head-select vendor-picker-trigger ${vendorPickerOpen ? 'is-open' : ''}`.trim()}
+        onClick={() => {
+          setVendorPickerOpen((prev) => !prev)
+          setShowCreateVendorPanel(false)
+        }}
+        disabled={loading}
+      >
+        <span className={`vendor-picker-trigger-label ${selectedVendorOption ? 'has-value' : ''}`.trim()}>
+          {selectedVendorOption ? (selectedVendorOption.email || selectedVendorOption.companyName) : 'Select Vendor'}
+        </span>
+      </button>
+      {vendorPickerOpen ? (
+        <div className="vendor-picker-panel">
+          <button
+            type="button"
+            className="vendor-picker-create-btn"
+            onClick={() => {
+              setShowCreateVendorPanel(true)
+              setCreateVendorStep('email')
+              setVendorPickerOpen(false)
+            }}
+          >
+            [+] Create New Vendor
+          </button>
+          <div className="vendor-picker-options">
+            {vendorOptions.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                className="vendor-picker-option"
+                onClick={() => onVendorChange(option.key)}
+              >
+                <span className="vendor-picker-option-primary">{option.email || option.companyName}</span>
+                <span className="vendor-picker-option-secondary">
+                  {option.contactName || option.email}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+
+  const renderCreateVendorPanel = () => (
+    <div className={`vendor-create-panel ${createVendorStep === 'full' ? 'is-full' : 'is-email-step'}`.trim()}>
+      <div className="vendor-create-title">Create Vendor</div>
+      {createVendorStep === 'email' ? (
+        <div className="vendor-create-email-row">
+          <input
+            className="bidder-add-head-input vendor-create-input"
+            type="email"
+            value={createVendorDraft.email}
+            placeholder="Add vendor email"
+            onChange={(event) => setCreateVendorDraft((prev) => ({ ...prev, email: event.target.value }))}
+          />
+          <button
+            type="button"
+            className="btn vendor-create-next-btn"
+            onClick={() => {
+              const email = String(createVendorDraft.email || '').trim()
+              if (!email) {
+                setStatusMessage('Vendor email is required.')
+                return
+              }
+              const normalizedEmail = email.toLowerCase()
+              const existingOption = findVendorByEmail(vendorOptions, normalizedEmail)
+              if (existingOption) {
+                setSelectedVendorKey(existingOption.key)
+                setShowCreateVendorPanel(false)
+                setCreateVendorStep('email')
+                setVendorPickerOpen(false)
+                setCreateVendorDraft({
+                  email: '',
+                  name: '',
+                  phone: '',
+                  inviteToHub: true
+                })
+                setStatusMessage('Vendor email already exists. Loaded existing vendor.')
+                return
+              }
+              setCreateVendorStep('full')
+            }}
+          >
+            NEXT
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="vendor-create-grid">
+            <label>
+              <span>Email</span>
+              <input
+                className="bidder-add-head-input vendor-create-input"
+                type="email"
+                value={createVendorDraft.email}
+                placeholder="vendoremail@gmail.com"
+                onChange={(event) => setCreateVendorDraft((prev) => ({ ...prev, email: event.target.value }))}
+              />
+            </label>
+            <label>
+              <span>Name</span>
+              <input
+                className="bidder-add-head-input vendor-create-input"
+                type="text"
+                value={createVendorDraft.name}
+                placeholder="Sean Penn"
+                onChange={(event) => setCreateVendorDraft((prev) => ({ ...prev, name: event.target.value }))}
+              />
+            </label>
+            <label>
+              <span>Phone</span>
+              <input
+                className="bidder-add-head-input vendor-create-input"
+                type="text"
+                value={createVendorDraft.phone}
+                placeholder="123 1234 4221"
+                onChange={(event) => setCreateVendorDraft((prev) => ({ ...prev, phone: event.target.value }))}
+              />
+            </label>
+          </div>
+          <div className="vendor-create-actions">
+            <label className="vendor-create-toggle">
+              <input
+                type="checkbox"
+                checked={createVendorDraft.inviteToHub}
+                onChange={(event) => setCreateVendorDraft((prev) => ({ ...prev, inviteToHub: event.target.checked }))}
+              />
+              <span>Invite to Vendor Hub</span>
+            </label>
+            <button
+              type="button"
+              className="btn vendor-create-submit-btn"
+              onClick={createVendorAndSelect}
+            >
+              CREATE VENDOR & ADD
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
   const requiredApprovalsBySpecItem = useMemo(
     () => Object.fromEntries(
       (specItems || []).map((item) => [String(item.id), item.required_approvals || []])
@@ -1351,7 +1550,7 @@ export default function PackageDashboardPage() {
             {!postAwardActive && !approvalsOnlyMode && !showEmptyBiddersState ? (
               <div className="bidders-head-actions">
                 <label className="bidders-sort-control">
-                  <span className="bidders-sort-label">Sort by:</span>
+                  <span className="bidders-sort-label">Sort By</span>
                   <select
                     className="bidders-sort-select"
                     value={biddersSort}
@@ -1372,7 +1571,7 @@ export default function PackageDashboardPage() {
               </div>
             ) : null}
           </div>
-          <table className="table data-table" style={{ width: '100%' }}>
+          <table className="table data-table bidders-table">
             <thead>
               <tr>
                 <th style={{ width: '200px' }} className="data-table-col-head">Vendor</th>
@@ -1402,7 +1601,7 @@ export default function PackageDashboardPage() {
                 const isComparisonVisible = comparisonVisibleInviteIdSet.has(String(row.invite_id))
                 return (
                   <tr key={row.invite_id} className={isNotStarted ? 'bidder-row-muted' : ''}>
-                    <td>
+                    <td className="bidder-vendor-cell">
                       <div className="bidder-vendor-topline">
                         <span className="bidder-controls">
                           {!postAwardActive ? (
@@ -1441,11 +1640,11 @@ export default function PackageDashboardPage() {
                             style={{ background: row.access_state === 'enabled' ? '#10b981' : '#ef4444' }}
                           />
                         </span>
-                        <span className="bidder-vendor-name">{vendorDisplayName(row.dealer_name)}</span>
+                        <span className="bidder-vendor-name">{vendorDisplayName(row.dealer_name, row.dealer_email)}</span>
                       </div>
                       <div className="bidder-password-line">
                         <span className="bidder-controls-spacer" />
-                        <span>Password:</span>
+                        <span className="bidder-password-label">Password:</span>
                         {editingPasswordInviteId === row.invite_id ? (
                           <input
                             className="password-inline-input"
@@ -1467,8 +1666,7 @@ export default function PackageDashboardPage() {
                           />
                         ) : (
                           <button
-                            className="btn"
-                            style={{ padding: '0.1rem 0.35rem', fontSize: '0.75rem', minWidth: 'auto', lineHeight: '1', fontFamily: 'monospace', background: '#f5f5f5', border: '1px solid #e0e0e0' }}
+                            className="btn bidder-password-chip"
                             title="Click to change password"
                             onClick={() => {
                               setEditingPasswordInviteId(row.invite_id)
@@ -1497,7 +1695,7 @@ export default function PackageDashboardPage() {
                         </button>
                       </div>
                     </td>
-                    <td>
+                    <td className="bidder-status-column">
                       {postAwardActive && effectiveSelectionStatus === 'awarded' ? (
                         <div className="bidder-status-cell bidder-status-cell-awarded">
                           <span className="bidder-status-chip-awarded">Awarded</span>
@@ -1559,51 +1757,34 @@ export default function PackageDashboardPage() {
                         </div>
                       ) : null}
                     </td>
-                    <td>
+                    <td className="bidder-snapshot-cell">
                       {isNotStarted ? (
-                        <span className="text-muted" style={{ fontSize: '0.85rem' }}>Not started</span>
+                        <span className="bidder-snapshot-empty">Not Started</span>
                       ) : (
                         <>
-                          <div
-                            style={{
-                              background: '#e8e8e8',
-                              height: '6px',
-                              borderRadius: '3px',
-                              overflow: 'hidden',
-                              marginBottom: '0.4rem'
-                            }}
-                          >
-                          <div
-                            style={{
-                              width: `${Math.max(0, Math.min(100, Number(row.completion_pct ?? 0)))}%`,
-                              height: '100%',
-                              background: isFullyComplete ? '#10b981' : '#f59e0b',
-                              transition: 'width 0.3s'
-                            }}
-                          />
-                        </div>
-                          <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.75rem' }}>
-                            <span
-                              style={{
-                                color: isFullyComplete ? '#10b981' : '#f59e0b',
-                                fontWeight: '500'
-                              }}
-                            >
+                          <div className="bidder-progress-track">
+                            <div
+                              className={`bidder-progress-fill ${isFullyComplete ? 'is-complete' : 'is-active'}`}
+                              style={{ width: `${Math.max(0, Math.min(100, Number(row.completion_pct ?? 0)))}%` }}
+                            />
+                          </div>
+                          <div className="bidder-snapshot-meta">
+                            <span className={isFullyComplete ? 'bidder-snapshot-pill is-complete' : 'bidder-snapshot-pill is-active'}>
                               {`${Math.round(completionPct)}% complete`}
                             </span>
                             {(row.bod_skipped_pct ?? 0) > 0 ? (
-                              <span style={{ color: '#f59e0b', fontWeight: '500' }}>
+                              <span className="bidder-snapshot-pill is-skipped">
                                 {`${Math.round(row.bod_skipped_pct ?? 0)}% BoD skipped`}
                               </span>
                             ) : null}
                           </div>
-                          <div className="text-muted" style={{ fontSize: '0.75rem', marginTop: '0.2rem' }}>
+                          <div className="bidder-snapshot-breakdown">
                             {`${row.bod_only_count ?? 0} BoD • ${row.mixed_line_count ?? 0} BoD-Sub • ${row.sub_only_count ?? 0} Sub`}
                           </div>
                         </>
                       )}
                     </td>
-                    <td>
+                    <td className="bidder-total-column">
                       <div className="bidder-total-main">
                         {totalDisplay}
                       </div>
@@ -1692,18 +1873,11 @@ export default function PackageDashboardPage() {
                         </div>
                       ) : null}
                     </td>
-                    <td style={{ textAlign: 'right' }}>
+                    <td className="bidder-delete-cell">
                       <button
-                        className="btn"
-                        style={{
-                          padding: '0.25rem 0.4rem',
-                          fontSize: '0.75rem',
-                          minWidth: 'auto',
-                          lineHeight: '1',
-                          color: '#ef4444'
-                        }}
+                        className="btn bidder-delete-action"
                         title="Remove bidder"
-                        onClick={() => deleteBidderRow(row)}
+                        onClick={() => setDeleteBidderModal(row)}
                         disabled={loading}
                       >
                         ✕
@@ -1741,22 +1915,17 @@ export default function PackageDashboardPage() {
               <button
                 className="btn bidder-add-cancel-btn"
                 type="button"
-                onClick={() => setShowAddBidderForm(false)}
+                onClick={() => {
+                  setShowAddBidderForm(false)
+                  setShowCreateVendorPanel(false)
+                  setCreateVendorStep('email')
+                }}
                 disabled={loading}
                 title="Cancel"
               >
                 ✕
               </button>
-              <select
-                className="bidder-add-head-input bidder-add-head-select"
-                value={selectedVendorKey}
-                onChange={(event) => onVendorChange(event.target.value)}
-              >
-                <option value="">Select vendor</option>
-                {vendorOptions.map((option) => (
-                  <option key={option.key} value={option.key}>{option.label}</option>
-                ))}
-              </select>
+              {renderVendorPicker()}
               <input
                 className="bidder-add-head-input bidder-add-head-password"
                 type="text"
@@ -1767,7 +1936,7 @@ export default function PackageDashboardPage() {
               <button
                 className="btn bidder-add-submit-btn"
                 onClick={addInvite}
-                disabled={loading || !dealerName.trim() || !invitePassword || !loadedBidPackageId}
+                disabled={loading || !selectedVendorRecord || !invitePassword || !loadedBidPackageId}
                 title="Add bidder"
               >
                 +
@@ -1777,7 +1946,11 @@ export default function PackageDashboardPage() {
           {!postAwardActive && !showAddBidderForm && !showEmptyBiddersState ? (
             <button
               className="btn bidder-add-link-btn"
-              onClick={() => setShowAddBidderForm(true)}
+              onClick={() => {
+                setShowAddBidderForm(true)
+                setShowCreateVendorPanel(false)
+                setCreateVendorStep('email')
+              }}
               disabled={!loadedBidPackageId || loading || approvalsOnlyMode}
             >
               <img src={plusBidderIcon} alt="" aria-hidden="true" />
@@ -1787,17 +1960,7 @@ export default function PackageDashboardPage() {
           {showEmptyBiddersState ? (
             <>
               <div className="bidder-add-head-inline bidders-empty-inline">
-                <select
-                  className="bidder-add-head-input bidder-add-head-select"
-                  value={selectedVendorKey}
-                  onChange={(event) => onVendorChange(event.target.value)}
-                  disabled={loading}
-                >
-                  <option value="">Select Vendor</option>
-                  {vendorOptions.map((option) => (
-                    <option key={option.key} value={option.key}>{option.label}</option>
-                  ))}
-                </select>
+                {renderVendorPicker()}
                 <input
                   className="bidder-add-head-input bidder-add-head-password"
                   type="text"
@@ -1809,23 +1972,35 @@ export default function PackageDashboardPage() {
                 <button
                   className="btn bidder-add-submit-btn"
                   onClick={addInvite}
-                  disabled={loading || !dealerName.trim() || !invitePassword || !loadedBidPackageId}
+                  disabled={loading || !selectedVendorRecord || !invitePassword || !loadedBidPackageId}
                   title="Add bidder"
                   aria-label="Add bidder"
                 >
                   +
                 </button>
               </div>
+              {showCreateVendorPanel ? renderCreateVendorPanel() : null}
               <button
                 className="btn bidders-empty-skip-btn"
                 onClick={enableApprovalsOnlyMode}
                 disabled={!loadedBidPackageId || loading}
               >
-                Skip to approvals ➜
+                <span>Skip to approvals</span>
+                <span className="bidders-empty-skip-icon" aria-hidden="true">➜</span>
               </button>
             </>
           ) : null}
         </div>
+        {!postAwardActive && !approvalsOnlyMode && showAddBidderForm && showCreateVendorPanel ? (
+          <div className="bidder-create-vendor-row">
+            {renderCreateVendorPanel()}
+          </div>
+        ) : null}
+        {showEmptyBiddersState && showCreateVendorPanel ? (
+          <div className="bidder-create-vendor-row">
+            {renderCreateVendorPanel()}
+          </div>
+        ) : null}
       </SectionCard>
       ) : null}
       {loadedBidPackageId ? (
@@ -1837,7 +2012,7 @@ export default function PackageDashboardPage() {
                 <div className="comparison-history-banner-content">
                   <p className="comparison-history-banner-title">Viewing Historical Bid</p>
                   <p className="comparison-history-banner-details">
-                    {`${vendorDisplayName(historyView.dealerName)} - Version ${historyView.version} (${historyView.date} at ${historyView.time}) `}
+                    {`${vendorDisplayName(historyView.dealerName, historyView.dealerEmail)} - Version ${historyView.version} (${historyView.date} at ${historyView.time}) `}
                     <span className="comparison-history-banner-warning">You cannot award a bid while in history mode.</span>
                   </p>
                 </div>
@@ -2063,22 +2238,56 @@ export default function PackageDashboardPage() {
 
       {clearAwardModal ? (
         <div className="modal-backdrop" onClick={() => setClearAwardModal(null)}>
-          <div className="modal-card award-modal-card" onClick={(event) => event.stopPropagation()}>
-            <h3>Confirm Remove Award</h3>
-            <p className="award-modal-copy">
-              {`Removing this award will return the package to bidding mode. You can lock in ${clearAwardModal.dealerName || 'this vendor'} as the selected vendor again later if needed.`}
+          <div className="modal-card award-modal-card award-modal-card-remove" onClick={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              className="award-modal-close-dot"
+              onClick={() => setClearAwardModal(null)}
+              disabled={loading}
+              aria-label="Close remove award modal"
+            >
+              ×
+            </button>
+            <h3>Remove award</h3>
+            <p className="award-modal-remove-copy">
+              Removing this award will return the package to bidding mode.
             </p>
-            <div className="action-row">
-              <button type="button" className="btn" onClick={() => setClearAwardModal(null)} disabled={loading}>
-                Cancel
-              </button>
-              <button type="button" className="btn btn-primary" onClick={clearAwardForPackage} disabled={loading}>
-                Remove Award
-              </button>
-            </div>
+            <button type="button" className="btn award-modal-remove-btn" onClick={clearAwardForPackage} disabled={loading}>
+              Remove Award
+            </button>
           </div>
         </div>
       ) : null}
+
+      {deleteBidderModal ? (
+        <div className="modal-backdrop" onClick={() => setDeleteBidderModal(null)}>
+          <div className="modal-card bidder-delete-modal-card" onClick={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              className="bidder-delete-modal-close"
+              onClick={() => setDeleteBidderModal(null)}
+              aria-label="Close delete modal"
+            >
+              ×
+            </button>
+            <h3>Delete Bid and Bidder</h3>
+            <p className="bidder-delete-modal-copy">
+              Are you sure you want to delete this bid and bidder?
+              <br />
+              This action cannot be reverted.
+            </p>
+            <button
+              type="button"
+              className="btn bidder-delete-modal-confirm"
+              onClick={() => deleteBidderRow(deleteBidderModal)}
+              disabled={loading}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {toastMessage ? <div className="floating-toast">{toastMessage}</div> : null}
 
     </div>
   )
