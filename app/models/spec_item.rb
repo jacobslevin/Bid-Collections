@@ -9,6 +9,6 @@ class SpecItem < ApplicationRecord
 
   validates :spec_item_id, :category, :manufacturer, :product_name,
             :quantity, :uom, presence: true
-  validates :quantity, numericality: { greater_than: 0 }
+  validates :quantity, numericality: { greater_than_or_equal_to: 0 }
   validates :spec_item_id, uniqueness: { scope: :bid_package_id }
 end

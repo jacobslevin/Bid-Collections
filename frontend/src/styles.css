@@ -3024,6 +3024,10 @@ body {
   max-height: 180px;
   overflow: auto;
 }
+.error-box li {
+  margin: 0.2rem 0;
+  line-height: 1.35;
+}
 .responder-list {
   display: grid;
   grid-template-columns: 1fr;

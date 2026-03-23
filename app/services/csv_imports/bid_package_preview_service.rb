@@ -59,7 +59,7 @@ module CsvImports
         normalized['spec_item_id'] = normalized['spec_item_id'].presence || SecureRandom.uuid
 
         quantity = parse_quantity(normalized['quantity'])
-        errors << "Row #{idx + 2}: quantity must be numeric and > 0" if quantity.nil? || quantity <= 0
+        errors << "Row #{idx + 2}: quantity must be numeric and >= 0" if quantity.nil? || quantity < 0
 
         required_fields_for(profile).each do |field|
           next if field == 'quantity'
