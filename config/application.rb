@@ -6,16 +6,13 @@ require 'active_job/railtie'
 require 'active_record/railtie'
 require 'action_controller/railtie'
 require 'action_view/railtie'
-require 'action_mailer/railtie'
-require 'active_storage/engine'
-require 'action_cable/engine'
 require 'rails/test_unit/railtie'
 
 Bundler.require(*Rails.groups)
 
 module BidCollections
   class Application < Rails::Application
-    config.load_defaults 7.1
+    config.load_defaults 5.2
     config.api_only = true
 
     config.secret_key_base = ENV.fetch('SECRET_KEY_BASE', 'dev-secret-key-base')

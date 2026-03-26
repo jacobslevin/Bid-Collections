@@ -1,4 +1,4 @@
-class CreateInvites < ActiveRecord::Migration[7.1]
+class CreateInvites < ActiveRecord::Migration[5.2]
   def change
     create_table :invites do |t|
       t.references :bid_package, null: false, foreign_key: true

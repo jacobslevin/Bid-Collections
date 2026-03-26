@@ -169,7 +169,7 @@ module Api
           end
         end
 
-        render json: { reopened: true, reopened_ids:, skipped_ids: }
+        render json: { reopened: true, reopened_ids: reopened_ids, skipped_ids: skipped_ids }
       end
 
       def bulk_destroy
@@ -182,7 +182,7 @@ module Api
           invite.destroy!
         end
 
-        render json: { deleted: true, deleted_ids: }
+        render json: { deleted: true, deleted_ids: deleted_ids }
       end
 
       private

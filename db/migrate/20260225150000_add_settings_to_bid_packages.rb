@@ -1,4 +1,4 @@
-class AddSettingsToBidPackages < ActiveRecord::Migration[7.1]
+class AddSettingsToBidPackages < ActiveRecord::Migration[5.2]
   DEFAULT_GENERAL_FIELDS = %w[
     delivery_amount
     install_amount

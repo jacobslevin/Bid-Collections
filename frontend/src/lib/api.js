@@ -1,8 +1,47 @@
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:3000'
+const mode = import.meta.env.MODE
+
+function defaultApiBaseUrlByMode() {
+  switch (mode) {
+    case 'production':
+      return 'https://www.designerpages.com'
+    case 'staging':
+      return 'https://staging.designerpages.com'
+    case 'development':
+    default:
+      return 'http://127.0.0.1:3000'
+  }
+}
+
+const envApiBaseUrl = import.meta.env.VITE_API_BASE_URL || defaultApiBaseUrlByMode()
+const envApiPrefix = import.meta.env.VITE_API_PREFIX || '/api'
+
+function trimTrailingSlash(value) {
+  return String(value || '').replace(/\/+$/, '')
+}
+
+function trimLeadingSlash(value) {
+  return String(value || '').replace(/^\/+/, '')
+}
+
+function normalizePath(path) {
+  const cleanPath = String(path || '')
+  return cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`
+}
+
+export const API_BASE_URL = trimTrailingSlash(envApiBaseUrl)
+export const API_PREFIX = `/${trimLeadingSlash(envApiPrefix || '/api')}`.replace(/\/+$/, '')
+
+function buildApiUrl(path) {
+  const normalizedPath = normalizePath(path)
+  if (normalizedPath.startsWith(`${API_PREFIX}/`) || normalizedPath === API_PREFIX) {
+    return `${API_BASE_URL}${normalizedPath}`
+  }
+  return `${API_BASE_URL}${API_PREFIX}${normalizedPath}`
+}
 
 async function request(path, options = {}) {
   const isFormData = options.body instanceof FormData
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(buildApiUrl(path), {
     credentials: 'include',
     ...options,
     headers: isFormData
@@ -395,7 +434,7 @@ export function comparisonExportUrl(
   params.append('show_lead_time', String(columnOptions.showLeadTime ?? false))
   params.append('show_notes', String(columnOptions.showNotes ?? false))
   const query = params.toString()
-  return `${API_BASE_URL}/api/bid_packages/${bidPackageId}/export.${format}${query ? `?${query}` : ''}`
+  return buildApiUrl(`/bid_packages/${bidPackageId}/export.${format}${query ? `?${query}` : ''}`)
 }
 
 export async function fetchInvite(token) {
@@ -491,5 +530,5 @@ export function bidPackagePostAwardUploadsBundleUrl(bidPackageId, { uploadIds = 
   if (includeTag) params.set('include_tag', '1')
   if (includeCode) params.set('include_code', '1')
   const query = params.toString()
-  return `${API_BASE_URL}/api/bid_packages/${bidPackageId}/post_award_uploads/download_all${query ? `?${query}` : ''}`
+  return buildApiUrl(`/bid_packages/${bidPackageId}/post_award_uploads/download_all${query ? `?${query}` : ''}`)
 }

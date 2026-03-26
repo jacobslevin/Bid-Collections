@@ -1,4 +1,4 @@
-class CreateBidLineItems < ActiveRecord::Migration[7.1]
+class CreateBidLineItems < ActiveRecord::Migration[5.2]
   def change
     create_table :bid_line_items do |t|
       t.references :bid, null: false, foreign_key: true

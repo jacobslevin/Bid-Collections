@@ -1,13 +1,16 @@
-# Bid Collections Prototype Backend Skeleton
+# Bid Collections
 
-This repository contains the core Rails API backend skeleton for the Bid Collections MVP:
+This repository contains:
 
-- Rails API app runtime scaffolding
-- Data model migrations
-- ActiveRecord models and associations
-- API routes and controller skeletons
-- CSV import preview/commit, comparison, and export service objects
-- RSpec request spec scaffolding
+- A Rails API backend for bid package workflows.
+- A React + Vite frontend in `frontend/`.
+
+## Target Runtime
+
+- Ruby: `2.4.5`
+- Rails: `5.2.x` (currently `~> 5.2.8`)
+- Node (frontend): `14.0.0` via `frontend/.nvmrc`
+- React (frontend): `17.x` (aligned with host apps using `react_on_rails` `11.1.4`)
 
 ## API Surface
 
@@ -35,26 +38,85 @@ This repository contains the core Rails API backend skeleton for the Bid Collect
 - For Designer Pages profile, rows with `Product ID` are kept even if other fields are blank; import-safe defaults are applied (`sku` from product id, fallback product/manufacturer/category/description).
 - Bidder-facing source fields are preserved on `SpecItem`: `image_url`, `source_url`, `notes`, `description`, `attributes_text`, `nested_products`.
 
-## Current Environment Constraints
+## Run Locally
 
-- Ruby syntax checks pass.
-- `bundle install` and `bundle exec rspec` were not runnable in this sandbox because outbound network to RubyGems is blocked.
-
-## Local Run (on your machine)
+### Backend (Rails API)
 
 ```bash
 bundle install
 bin/rails db:create db:migrate
-bundle exec rspec
 bin/rails s
 ```
 
-## Frontend Prototype
+Optional test run:
 
-A React/Vite UI shell is included in `/frontend` with the six MVP screens and mock data.
+```bash
+bundle exec rspec
+```
+
+### Frontend (React + Vite)
 
 ```bash
 cd frontend
 npm install
+cp .env.example .env
 npm run dev
+```
+
+Default URLs:
+
+- Backend API: `http://127.0.0.1:3000`
+- Frontend dev server: `http://127.0.0.1:5173`
+
+## Working As A Module In Another Project
+
+This repository now includes a mountable engine entrypoint:
+
+- `lib/bid_collections.rb`
+- `lib/bid_collections/engine.rb`
+- `bid_collections.gemspec`
+
+You can continue running this project standalone locally, and also mount it
+inside another Rails `5.2` app.
+
+### Mount In Host App (Engine mode)
+
+1. Add to host app `Gemfile`:
+
+```ruby
+gem 'bid_collections', path: '../bid-collections'
+```
+
+2. Bundle:
+
+```bash
+bundle install
+```
+
+3. Mount engine in host app `config/routes.rb`:
+
+```ruby
+mount BidCollections::Engine => '/bid_collections'
+```
+
+4. Install engine migrations into host app:
+
+```bash
+bin/rails railties:install:migrations
+bin/rails db:migrate
+```
+
+5. Call engine API through mounted path, for example:
+
+- `/bid_collections/api/projects`
+- `/bid_collections/api/bid_packages`
+
+### Keep Running Standalone Locally
+
+Standalone run remains unchanged:
+
+```bash
+bundle install
+bin/rails db:create db:migrate
+bin/rails s
 ```

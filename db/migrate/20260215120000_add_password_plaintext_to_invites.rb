@@ -1,4 +1,4 @@
-class AddPasswordPlaintextToInvites < ActiveRecord::Migration[7.1]
+class AddPasswordPlaintextToInvites < ActiveRecord::Migration[5.2]
   def change
     add_column :invites, :password_plaintext, :string
   end

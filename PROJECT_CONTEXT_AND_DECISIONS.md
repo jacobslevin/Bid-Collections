@@ -4,10 +4,7 @@
 This document captures how the Bid Collections MVP evolved through iterative product feedback and implementation decisions, and how those decisions map to the current codebase.
 
 Primary repo path:
-`/Users/jacobslevin/Documents/Documents - Jacob’s Mac Studio/Jake 2.0/Codex/Bid Collection`
-
-Primary repo URL:
-`https://github.com/jacobslevin/Bid-Collections`
+`/Users/aparra/Documents/workspace/bid-collections`
 
 ---
 
@@ -25,8 +22,10 @@ Enable a designer to:
 ## Core Tech Stack
 - Backend: Ruby on Rails (API)
 - Frontend: React + Vite
-- Data: PostgreSQL
-- Local dev: Rails on `localhost:3000`, Vite typically on `localhost:5173` or fallback `5174`
+- Data: MySQL (`mysql2`)
+- Runtime target: Ruby `2.4.5`, Rails `5.2.x`
+- Frontend runtime target: Node `14.0.0` (`frontend/.nvmrc`)
+- Local dev: Rails on `localhost:3000`, Vite on `localhost:5173`
 
 ---
 
@@ -36,6 +35,16 @@ Enable a designer to:
 - No full user auth system for designers/dealers.
 - Dealer access is by invite token + password.
 - Focus on import, invite, bid entry, comparison, export.
+- Standalone mode remains first-class for local development and fast iteration.
+
+## 1b) Add mountable engine support (Mode B)
+- Added mountable engine entrypoints so this code can run inside a host Rails app:
+  - `bid_collections.gemspec`
+  - `lib/bid_collections.rb`
+  - `lib/bid_collections/engine.rb`
+- Added shared route drawing in `lib/bid_collections/routes.rb`.
+- Both standalone app routes and engine routes now use the same route definition.
+- Host app can mount using: `mount BidCollections::Engine => '/bid_collections'`.
 
 ## 2) “Project” handling simplified but restored in UI
 - Early simplification removed projects from UI.
@@ -118,6 +127,10 @@ Notable fields:
 - `bids.state` (`draft` / `submitted`)
 - `bid_submission_versions` stores snapshot payload + total per submission
 
+Integration note:
+- To avoid host migration collisions, migrations can be made idempotent (for
+  example `return if table_exists?(:projects)` in create-table migrations).
+
 ---
 
 ## API/Behavior Highlights
@@ -148,7 +161,8 @@ Notable fields:
 From project root:
 
 ```bash
-cd "/Users/jacobslevin/Documents/Documents - Jacob’s Mac Studio/Jake 2.0/Codex/Bid Collection"
+cd "/Users/aparra/Documents/workspace/bid-collections"
+bundle install
 bin/rails db:migrate
 bin/rails s
 ```
@@ -156,11 +170,26 @@ bin/rails s
 Frontend:
 
 ```bash
-cd "/Users/jacobslevin/Documents/Documents - Jacob’s Mac Studio/Jake 2.0/Codex/Bid Collection/frontend"
+cd "/Users/aparra/Documents/workspace/bid-collections/frontend"
+nvm use
+npm install
 npm run dev
 ```
 
-If Vite says 5173 is in use, it may run on 5174.
+API routing for embedded host integration:
+- `VITE_API_BASE_URL=http://127.0.0.1:3000`
+- `VITE_API_PREFIX=/bid_collections/api` (when mounted in host app)
+
+---
+
+## Host App Integration (Rails 5.2 + React)
+
+Two supported modes:
+1. Service-style integration (`/api` served by standalone bid-collections app).
+2. Engine mode (in-process) via:
+   - `gem 'bid_collections', path: '../bid-collections'` or Git source
+   - `mount BidCollections::Engine => '/bid_collections'`
+   - `bin/rails railties:install:migrations && bin/rails db:migrate`
 
 ---
 

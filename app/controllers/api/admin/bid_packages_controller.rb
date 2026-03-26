@@ -609,7 +609,7 @@ module Api
         base_name = file_name.to_s
         dot = base_name.rindex('.')
         stem = (dot && dot.positive?) ? base_name[0...dot] : base_name
-        ext = (dot && dot.positive?) ? base_name[dot..] : ''
+        ext = (dot && dot.positive?) ? base_name[dot..-1] : ''
 
         code = include_code_tag ? normalize_download_token(code_tag) : ''
         requirement = include_requirement_tag ? normalize_download_token(requirement_label) : ''
@@ -628,7 +628,7 @@ module Api
         ext = ''
         if (dot = name.rindex('.')) && dot.positive?
           base = name[0...dot]
-          ext = name[dot..]
+          ext = name[dot..-1]
         end
 
         candidate = name
