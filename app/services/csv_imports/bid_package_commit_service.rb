@@ -1,6 +1,7 @@
 module CsvImports
   class BidPackageCommitService
-    Result = Struct.new(:success?, :bid_package, :imported_items_count, :errors, keyword_init: true)
+    # Ruby 2.4 doesn't support Struct keyword_init:
+    Result = Struct.new(:success?, :bid_package, :imported_items_count, :errors)
 
     def initialize(project:, package_name:, source_filename:, parsed_rows:, visibility: 'private', active_general_fields: nil, instructions: nil)
       @project = project
@@ -30,14 +31,9 @@ module CsvImports
         end
       end
 
-      Result.new(
-        success?: true,
-        bid_package: bid_package,
-        imported_items_count: @parsed_rows.size,
-        errors: []
-      )
+      Result.new(true, bid_package, @parsed_rows.size, [])
     rescue ActiveRecord::RecordInvalid => e
-      Result.new(success?: false, bid_package: nil, imported_items_count: 0, errors: e.record.errors.full_messages)
+      Result.new(false, nil, 0, e.record.errors.full_messages)
     end
   end
 end

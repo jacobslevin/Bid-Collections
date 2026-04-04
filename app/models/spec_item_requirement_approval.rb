@@ -3,7 +3,7 @@ class SpecItemRequirementApproval < ApplicationRecord
   belongs_to :spec_item
   belongs_to :bid, optional: true
 
-  enum :status, { pending: 0, approved: 1, needs_revision: 2 }, default: :pending
+  enum status: { pending: 0, approved: 1, needs_revision: 2 }
 
   validates :requirement_key, presence: true
   validates :approved_at, presence: true, if: :approved?

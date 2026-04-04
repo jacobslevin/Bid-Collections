@@ -3,7 +3,7 @@ class BidAwardEvent < ApplicationRecord
   belongs_to :from_bid, class_name: 'Bid', optional: true
   belongs_to :to_bid, class_name: 'Bid'
 
-  enum :event_type, { award: 0, reaward: 1, unaward: 2 }
+  enum event_type: { award: 0, reaward: 1, unaward: 2 }
 
   validates :awarded_amount_snapshot, :awarded_by, :awarded_at, presence: true
 

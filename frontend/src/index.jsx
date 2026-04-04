@@ -30,4 +30,3 @@ export function BidCollectionsApp({
 }
 
 export { App }
-

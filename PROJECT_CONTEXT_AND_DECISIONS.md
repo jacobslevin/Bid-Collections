@@ -59,6 +59,10 @@ Enable a designer to:
 - `Qty` header alias added so quantity maps correctly (not defaulting to 1).
 - Code/Tag label shown throughout UI instead of SKU wording.
 
+### 3b) Import UI prerequisites and CSV edge cases (local dev)
+- Import flow requires at least one `Project` to exist; the Import page enables preview only when a project is selected and CSV content is loaded.
+- Designer Pages exports may omit `Code` for some rows; since `spec_items.sku` is `NOT NULL`, the import path defaults `sku` from `spec_item_id` when missing (Designer Pages profile).
+
 ## 4) Bid comparison UX optimized for decision-making
 - Dealer columns grouped visually.
 - Delta shown as percent vs avg (`% Avg Delta`).
@@ -166,6 +170,13 @@ bundle install
 bin/rails db:migrate
 bin/rails s
 ```
+
+### Ruby 2.4 / Rails 5.2 implementation constraints (important)
+- Rails 5.2 does **not** support newer Rails APIs used by Rails 7+:
+  - `ApplicationRecord.primary_abstract_class` must be `self.abstract_class = true`
+  - `enum :field, ...` syntax is not supported; use Rails 5.2 enum declarations
+- Ruby 2.4 does **not** support `Struct.new(..., keyword_init: true)`; import services avoid `keyword_init`.
+- If `loofah` is updated too far on Ruby 2.4, boot can fail with `Nokogiri::HTML4` errors; pin `loofah` to a compatible version.
 
 Frontend:
 

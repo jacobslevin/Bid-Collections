@@ -16,7 +16,7 @@ class BidPackage < ApplicationRecord
   has_many :spec_item_requirement_approvals, dependent: :destroy
   has_many :post_award_uploads, dependent: :destroy
 
-  enum :visibility, { private: 0, public: 1 }, default: :private, prefix: :visibility
+  enum visibility: { private: 0, public: 1 }, _prefix: true
 
   validates :name, :source_filename, :imported_at, presence: true
 

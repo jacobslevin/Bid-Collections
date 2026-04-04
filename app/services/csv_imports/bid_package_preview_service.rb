@@ -36,7 +36,8 @@ module CsvImports
       'designer_pages' => %w[spec_item_id]
     }.freeze
 
-    Result = Struct.new(:valid?, :rows, :errors, :row_count, :profile, keyword_init: true)
+    # Ruby 2.4 doesn't support Struct keyword_init:
+    Result = Struct.new(:valid?, :rows, :errors, :row_count, :profile)
 
     def initialize(csv_content:, source_profile: nil)
       @csv_content = csv_content
@@ -72,9 +73,9 @@ module CsvImports
 
       normalize_duplicate_spec_item_ids!(rows) if profile == 'designer_pages'
 
-      Result.new(valid?: errors.empty?, rows: rows, errors: errors, row_count: rows.size, profile: profile)
+      Result.new(errors.empty?, rows, errors, rows.size, profile)
     rescue CSV::MalformedCSVError => e
-      Result.new(valid?: false, rows: [], errors: ["Malformed CSV: #{e.message}"], row_count: 0, profile: 'unknown')
+      Result.new(false, [], ["Malformed CSV: #{e.message}"], 0, 'unknown')
     end
 
     private
@@ -127,6 +128,7 @@ module CsvImports
       row['quantity'] = '1' if row['quantity'].blank?
       row['uom'] = 'EA' if row['uom'].blank?
       row['product_name'] = "Product #{row['spec_item_id']}" if row['product_name'].blank? && row['spec_item_id'].present?
+      row['sku'] = row['spec_item_id'].to_s if row['sku'].blank? && row['spec_item_id'].present?
       row['manufacturer'] = 'Unknown' if row['manufacturer'].blank?
       row['category'] = 'Uncategorized' if row['category'].blank?
       row['description'] = '' if row['description'].blank?

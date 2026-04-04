@@ -2,16 +2,17 @@
 # of editing this file, please use the migrations feature of Active Record to
 # incrementally modify your database, and then regenerate this schema definition.
 #
-# This file is the source Rails uses to define your schema when running `bin/rails
-# db:schema:load`. When creating a new database, `bin/rails db:schema:load` tends to
-# be faster and is potentially less error prone than running all of your
-# migrations from scratch. Old migrations may fail to apply correctly if those
-# migrations use external dependencies or application code.
+# Note that this schema.rb definition is the authoritative source for your
+# database schema. If you need to create the application database on another
+# system, you should be using db:schema:load, not running all the migrations
+# from scratch. The latter is a flawed and unsustainable approach (the more migrations
+# you'll amass, the slower it'll run and the greater likelihood for issues).
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[5.2].define(version: 2026_03_04_175602) do
-  create_table "bid_award_events", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
+ActiveRecord::Schema.define(version: 2026_03_04_175602) do
+
+  create_table "bid_award_events", options: "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "bid_package_id", null: false
     t.bigint "from_bid_id"
     t.bigint "to_bid_id", null: false
@@ -30,7 +31,24 @@ ActiveRecord::Schema[5.2].define(version: 2026_03_04_175602) do
     t.index ["to_bid_id"], name: "index_bid_award_events_on_to_bid_id"
   end
 
-  create_table "bid_line_items", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
+  create_table "bid_collection_invites", id: :integer, options: "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", force: :cascade do |t|
+    t.bigint "bid_package_id", null: false
+    t.string "dealer_name", null: false
+    t.string "dealer_email"
+    t.string "token", null: false
+    t.string "password_digest", null: false
+    t.datetime "last_unlocked_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.string "password_plaintext"
+    t.boolean "disabled", default: false, null: false
+    t.index ["bid_package_id", "dealer_name"], name: "index_bid_collection_invites_on_bid_package_id_and_dealer_name"
+    t.index ["bid_package_id"], name: "index_bid_collection_invites_on_bid_package_id"
+    t.index ["disabled"], name: "index_bid_collection_invites_on_disabled"
+    t.index ["token"], name: "index_bid_collection_invites_on_token", unique: true
+  end
+
+  create_table "bid_line_items", options: "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "bid_id", null: false
     t.bigint "spec_item_id", null: false
     t.decimal "unit_price", precision: 12, scale: 4
@@ -49,8 +67,8 @@ ActiveRecord::Schema[5.2].define(version: 2026_03_04_175602) do
     t.index ["spec_item_id"], name: "index_bid_line_items_on_spec_item_id"
   end
 
-  create_table "bid_packages", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
-    t.bigint "project_id", null: false
+  create_table "bid_packages", options: "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", force: :cascade do |t|
+    t.integer "project_id", null: false
     t.string "name", null: false
     t.string "source_filename", null: false
     t.datetime "imported_at", null: false
@@ -68,7 +86,7 @@ ActiveRecord::Schema[5.2].define(version: 2026_03_04_175602) do
     t.index ["public_token"], name: "index_bid_packages_on_public_token", unique: true
   end
 
-  create_table "bid_submission_versions", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
+  create_table "bid_submission_versions", options: "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "bid_id", null: false
     t.integer "version_number", null: false
     t.datetime "submitted_at", null: false
@@ -81,7 +99,7 @@ ActiveRecord::Schema[5.2].define(version: 2026_03_04_175602) do
     t.index ["bid_id"], name: "index_bid_submission_versions_on_bid_id"
   end
 
-  create_table "bids", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
+  create_table "bids", options: "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.integer "invite_id", null: false
     t.integer "state", default: 0, null: false
     t.datetime "submitted_at"
@@ -92,32 +110,15 @@ ActiveRecord::Schema[5.2].define(version: 2026_03_04_175602) do
     t.decimal "delivery_amount", precision: 14, scale: 2
     t.decimal "install_amount", precision: 14, scale: 2
     t.decimal "escalation_amount", precision: 14, scale: 2
-    t.decimal "sales_tax_amount", precision: 14, scale: 2
     t.decimal "contingency_amount", precision: 14, scale: 2
+    t.decimal "sales_tax_amount", precision: 14, scale: 2
     t.integer "selection_status", default: 0, null: false
     t.index ["invite_id"], name: "index_bids_on_invite_id", unique: true
     t.index ["selection_status"], name: "index_bids_on_selection_status"
     t.index ["state"], name: "index_bids_on_state"
   end
 
-  create_table "bid_collection_invites", id: :integer, charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
-    t.bigint "bid_package_id", null: false
-    t.string "dealer_name", null: false
-    t.string "dealer_email"
-    t.string "token", null: false
-    t.string "password_digest", null: false
-    t.datetime "last_unlocked_at"
-    t.datetime "created_at", null: false
-    t.datetime "updated_at", null: false
-    t.string "password_plaintext"
-    t.boolean "disabled", default: false, null: false
-    t.index ["bid_package_id", "dealer_name"], name: "index_bid_collection_invites_on_bid_package_id_and_dealer_name"
-    t.index ["bid_package_id"], name: "index_bid_collection_invites_on_bid_package_id"
-    t.index ["disabled"], name: "index_bid_collection_invites_on_disabled"
-    t.index ["token"], name: "index_bid_collection_invites_on_token", unique: true
-  end
-
-  create_table "post_award_uploads", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
+  create_table "post_award_uploads", options: "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "bid_package_id", null: false
     t.bigint "spec_item_id"
     t.integer "invite_id"
@@ -137,14 +138,14 @@ ActiveRecord::Schema[5.2].define(version: 2026_03_04_175602) do
     t.index ["spec_item_id"], name: "index_post_award_uploads_on_spec_item_id"
   end
 
-  create_table "projects", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
+  create_table "projects", id: :integer, options: "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.string "name", null: false
     t.text "description"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
   end
 
-  create_table "spec_item_requirement_approvals", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
+  create_table "spec_item_requirement_approvals", options: "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "bid_package_id", null: false
     t.bigint "spec_item_id", null: false
     t.string "requirement_key", null: false
@@ -162,7 +163,7 @@ ActiveRecord::Schema[5.2].define(version: 2026_03_04_175602) do
     t.index ["spec_item_id"], name: "index_spec_item_requirement_approvals_on_spec_item_id"
   end
 
-  create_table "spec_items", charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci", force: :cascade do |t|
+  create_table "spec_items", options: "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "bid_package_id", null: false
     t.string "spec_item_id", null: false
     t.string "category", null: false
@@ -194,15 +195,15 @@ ActiveRecord::Schema[5.2].define(version: 2026_03_04_175602) do
   add_foreign_key "bid_award_events", "bid_packages"
   add_foreign_key "bid_award_events", "bids", column: "from_bid_id"
   add_foreign_key "bid_award_events", "bids", column: "to_bid_id"
+  add_foreign_key "bid_collection_invites", "bid_packages"
   add_foreign_key "bid_line_items", "bids"
   add_foreign_key "bid_line_items", "spec_items"
   add_foreign_key "bid_packages", "bids", column: "awarded_bid_id"
   add_foreign_key "bid_packages", "projects"
   add_foreign_key "bid_submission_versions", "bids"
-  add_foreign_key "bids", "bid_collection_invites"
-  add_foreign_key "bid_collection_invites", "bid_packages"
+  add_foreign_key "bids", "bid_collection_invites", column: "invite_id"
+  add_foreign_key "post_award_uploads", "bid_collection_invites", column: "invite_id"
   add_foreign_key "post_award_uploads", "bid_packages"
-  add_foreign_key "post_award_uploads", "bid_collection_invites"
   add_foreign_key "post_award_uploads", "spec_items"
   add_foreign_key "spec_item_requirement_approvals", "bid_packages"
   add_foreign_key "spec_item_requirement_approvals", "bids"

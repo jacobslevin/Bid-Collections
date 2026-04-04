@@ -8,7 +8,7 @@ class PostAwardUpload < ApplicationRecord
   belongs_to :spec_item, optional: true
   belongs_to :invite, optional: true
 
-  enum :uploader_role, { vendor: 0, designer: 1 }, default: :vendor
+  enum uploader_role: { vendor: 0, designer: 1 }
 
   validates :file_name, presence: true
 

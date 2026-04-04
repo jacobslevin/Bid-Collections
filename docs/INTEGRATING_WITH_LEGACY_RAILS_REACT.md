@@ -23,6 +23,13 @@ bin/rails db:create db:migrate
 bin/rails s -p 3000
 ```
 
+#### Ruby 2.4 / Rails 5.2 compatibility notes
+
+- **Rails version**: This repo runs Rails `5.2.8.x` (despite some older references to 5.1).
+- **API-only + ActionMailer**: If `config/environments/*.rb` sets `config.action_mailer.*`, ensure `config/application.rb` loads `action_mailer/railtie` (API-only apps don’t load it by default).
+- **Nokogiri/Loofah on Ruby 2.4**: If you see `uninitialized constant Nokogiri::HTML4`, pin `loofah` to `< 2.21.0` (Ruby 2.4 commonly ends up with older Nokogiri).
+- **MySQL FK mismatch (engine vs standalone)**: Some host apps use integer primary keys; this repo aims to tolerate that. If MySQL complains about incompatible FK types, ensure migrations reference the actual PK type of the parent table.
+
 ### 2) Run the React app from this repository
 
 ```bash

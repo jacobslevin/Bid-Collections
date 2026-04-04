@@ -4,8 +4,8 @@ class Bid < ApplicationRecord
   has_many :bid_line_items, dependent: :destroy
   has_many :bid_submission_versions, dependent: :destroy
 
-  enum :state, { draft: 0, submitted: 1 }, default: :draft
-  enum :selection_status, { pending: 0, not_selected: 1, awarded: 2 }, default: :pending
+  enum state: { draft: 0, submitted: 1 }
+  enum selection_status: { pending: 0, not_selected: 1, awarded: 2 }
 
   validates :state, presence: true
   validates :delivery_amount, :install_amount, :escalation_amount, :contingency_amount, :sales_tax_amount,

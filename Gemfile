@@ -6,6 +6,7 @@ gem 'puma', '~> 4.3'
 gem 'bcrypt', '~> 3.1'
 gem 'rack-cors'
 gem 'caxlsx', '~> 3.0'
+gem 'loofah', '< 2.21.0'
 
 group :development, :test do
   gem 'pry'
