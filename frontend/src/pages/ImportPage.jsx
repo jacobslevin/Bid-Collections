@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import SectionCard from '../components/SectionCard'
-import { createBidPackage, fetchBidPackages, fetchProjects, importRowsToBidPackage, previewBidPackage } from '../lib/api'
+import {
+  createBidPackage,
+  dpFetchProjectBidPackages,
+  dpResolveContext,
+  DP_INTEGRATION_ENABLED,
+  fetchBidPackages,
+  fetchProjects,
+  importRowsToBidPackage,
+  previewBidPackage
+} from '../lib/api'
 
 const GENERAL_PRICING_FIELDS = [
   { key: 'delivery_amount', label: 'Shipping' },
@@ -51,15 +60,38 @@ export default function ImportPage() {
     const loadData = async () => {
       setLoadingProjects(true)
       try {
-        const [projectData, packageData] = await Promise.all([fetchProjects(), fetchBidPackages()])
-        const projectList = projectData.projects || []
-        const packageList = packageData.bid_packages || []
+        if (DP_INTEGRATION_ENABLED) {
+          const urlParams = new URLSearchParams(window.location.search || '')
+          const firmId = urlParams.get('firm_id')
+          const projectName = urlParams.get('project_name')
+          const projectNumber = urlParams.get('project_number')
 
-        setProjects(projectList)
-        setBidPackages(packageList)
+          if (!firmId || !projectName) {
+            throw new Error('Missing firm_id and/or project_name in URL parameters for DP integration mode')
+          }
 
-        if (projectList.length > 0) {
-          setSelectedProjectId(String(projectList[0].id))
+          const resolved = await dpResolveContext({ firmId, projectName, projectNumber })
+          const projectList = Array.isArray(resolved) ? resolved : []
+          setProjects(projectList)
+          if (projectList.length > 0) {
+            const dpProjectId = String(projectList[0].project_id)
+            setSelectedProjectId(dpProjectId)
+            const packageData = await dpFetchProjectBidPackages({ projectId: dpProjectId })
+            setBidPackages(packageData.bid_packages || [])
+          } else {
+            setBidPackages([])
+          }
+        } else {
+          const [projectData, packageData] = await Promise.all([fetchProjects(), fetchBidPackages()])
+          const projectList = projectData.projects || []
+          const packageList = packageData.bid_packages || []
+
+          setProjects(projectList)
+          setBidPackages(packageList)
+
+          if (projectList.length > 0) {
+            setSelectedProjectId(String(projectList[0].id))
+          }
         }
       } catch (error) {
         setStatusMessage(error.message)
@@ -72,7 +104,10 @@ export default function ImportPage() {
   }, [])
 
   const filteredExistingPackages = useMemo(
-    () => bidPackages.filter((pkg) => String(pkg.project_id) === String(selectedProjectId)),
+    () => {
+      if (DP_INTEGRATION_ENABLED) return bidPackages
+      return bidPackages.filter((pkg) => String(pkg.project_id) === String(selectedProjectId))
+    },
     [bidPackages, selectedProjectId]
   )
 

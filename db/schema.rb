@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema.define(version: 2026_03_04_175602) do
+ActiveRecord::Schema.define(version: 2026_04_09_121000) do
 
   create_table "bid_award_events", options: "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "bid_package_id", null: false
@@ -118,6 +118,41 @@ ActiveRecord::Schema.define(version: 2026_03_04_175602) do
     t.index ["state"], name: "index_bids_on_state"
   end
 
+  create_table "dp_spec_cache_entries", options: "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", force: :cascade do |t|
+    t.integer "project_id", null: false
+    t.string "project_product_id", null: false
+    t.json "payload", null: false
+    t.datetime "fetched_at", null: false
+    t.datetime "expires_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["expires_at"], name: "index_dp_spec_cache_entries_on_expires_at"
+    t.index ["project_id", "project_product_id"], name: "idx_dp_spec_cache_unique", unique: true
+    t.index ["project_id"], name: "index_dp_spec_cache_entries_on_project_id"
+  end
+
+  create_table "dp_sync_requests", options: "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", force: :cascade do |t|
+    t.string "sync_id", null: false
+    t.integer "status", default: 0, null: false
+    t.integer "project_id", null: false
+    t.bigint "bid_package_id", null: false
+    t.string "idempotency_key", null: false
+    t.string "requested_by"
+    t.json "received_ids", null: false
+    t.integer "resolved_count", default: 0, null: false
+    t.integer "missing_count", default: 0, null: false
+    t.json "missing_ids"
+    t.json "errors_json"
+    t.datetime "started_at"
+    t.datetime "finished_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["bid_package_id"], name: "index_dp_sync_requests_on_bid_package_id"
+    t.index ["idempotency_key"], name: "index_dp_sync_requests_on_idempotency_key", unique: true
+    t.index ["project_id"], name: "index_dp_sync_requests_on_project_id"
+    t.index ["sync_id"], name: "index_dp_sync_requests_on_sync_id", unique: true
+  end
+
   create_table "post_award_uploads", options: "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", force: :cascade do |t|
     t.bigint "bid_package_id", null: false
     t.bigint "spec_item_id"
@@ -143,6 +178,10 @@ ActiveRecord::Schema.define(version: 2026_03_04_175602) do
     t.text "description"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.bigint "firm_id"
+    t.string "dp_project_id"
+    t.index ["dp_project_id"], name: "index_projects_on_dp_project_id", unique: true
+    t.index ["firm_id"], name: "index_projects_on_firm_id"
   end
 
   create_table "spec_item_requirement_approvals", options: "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci", force: :cascade do |t|
@@ -202,6 +241,9 @@ ActiveRecord::Schema.define(version: 2026_03_04_175602) do
   add_foreign_key "bid_packages", "projects"
   add_foreign_key "bid_submission_versions", "bids"
   add_foreign_key "bids", "bid_collection_invites", column: "invite_id"
+  add_foreign_key "dp_spec_cache_entries", "projects"
+  add_foreign_key "dp_sync_requests", "bid_packages"
+  add_foreign_key "dp_sync_requests", "projects"
   add_foreign_key "post_award_uploads", "bid_collection_invites", column: "invite_id"
   add_foreign_key "post_award_uploads", "bid_packages"
   add_foreign_key "post_award_uploads", "spec_items"

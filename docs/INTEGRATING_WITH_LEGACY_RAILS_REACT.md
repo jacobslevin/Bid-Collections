@@ -30,6 +30,52 @@ bin/rails s -p 3000
 - **Nokogiri/Loofah on Ruby 2.4**: If you see `uninitialized constant Nokogiri::HTML4`, pin `loofah` to `< 2.21.0` (Ruby 2.4 commonly ends up with older Nokogiri).
 - **MySQL FK mismatch (engine vs standalone)**: Some host apps use integer primary keys; this repo aims to tolerate that. If MySQL complains about incompatible FK types, ensure migrations reference the actual PK type of the parent table.
 
+#### DP (DesignerPages) integration endpoints + auth
+
+Bid Collections exposes a small set of **service-to-service** endpoints intended to be called by the host app (DP) backend, not directly from browsers:
+
+- `POST /api/context`
+- `GET /api/projects/:project_id/bid_packages`
+- `POST /api/projects/:project_id/bid_packages/sync`
+- `GET /api/sync/:sync_id`
+
+Auth is **HMAC-signed headers**, not JWT (so no browser client needs a secret).
+
+- **Required env**:
+  - `BC_SERVICE_SHARED_SECRET`: shared secret used to verify request signatures
+  - `DP_API_BASE_URL`: base URL used by BC to call DP’s spec-batch endpoint (service mode)
+
+- **Required headers**:
+  - `X-BC-Timestamp`: unix epoch seconds
+  - `X-BC-Nonce`: random nonce (unique per request)
+  - `X-BC-Signature`: hex HMAC-SHA256
+
+Canonical string:
+
+```
+#{timestamp}.#{nonce}.#{method}.#{path}.#{sha256(body)}
+```
+
+#### Standalone local BC + public DP (HMAC proxy mode)
+
+If DP enforces HMAC on `/api/v2/bid_collections/**`, browsers cannot call those endpoints directly.
+In standalone mode, Bid Collections can proxy those DP calls:
+
+- Set `DP_API_BASE_URL=https://www.designerpages.com`
+- Set `BC_SERVICE_SHARED_SECRET=...` (same value used by DP)
+- Set frontend `VITE_DP_INTEGRATION=1`
+- Open the Import page with DP context params:
+  - `?firm_id=1234&project_name=New%20Seating%20Package`
+
+The frontend will call Bid Collections proxy endpoints:
+
+- `POST /api/dp/context`
+- `GET /api/dp/projects/:project_id/bid_packages`
+- `POST /api/dp/projects/:project_id/bid_packages/:package_id/selection`
+- `POST /api/dp/projects/:project_id/specs/batch`
+
+Bid Collections will sign and forward requests to DP’s `/api/v2/bid_collections/**` endpoints.
+
 ### 2) Run the React app from this repository
 
 ```bash

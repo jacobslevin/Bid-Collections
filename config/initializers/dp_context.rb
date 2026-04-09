@@ -1,0 +1,2 @@
+DP_API_BASE_URL='http://localhost'
+BC_SERVICE_SHARED_SECRET='123'

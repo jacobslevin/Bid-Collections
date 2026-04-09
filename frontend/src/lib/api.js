@@ -30,6 +30,7 @@ function normalizePath(path) {
 
 export const API_BASE_URL = trimTrailingSlash(envApiBaseUrl)
 export const API_PREFIX = `/${trimLeadingSlash(envApiPrefix || '/api')}`.replace(/\/+$/, '')
+export const DP_INTEGRATION_ENABLED = String(import.meta.env.VITE_DP_INTEGRATION || '') === '1'
 
 function buildApiUrl(path) {
   const normalizedPath = normalizePath(path)
@@ -78,6 +79,32 @@ export async function createProject(payload) {
 
 export async function fetchProjects() {
   return request('/api/projects')
+}
+
+// DP integration (browser -> BC proxy -> DP, HMAC signed server-to-server)
+export async function dpResolveContext({ firmId, projectName, projectNumber }) {
+  return request('/api/dp/context', {
+    method: 'POST',
+    body: JSON.stringify({ firm_id: firmId, project_name: projectName, project_number: projectNumber })
+  })
+}
+
+export async function dpFetchProjectBidPackages({ projectId }) {
+  return request(`/api/dp/projects/${projectId}/bid_packages`)
+}
+
+export async function dpResolvePackageSelection({ projectId, packageId, requestedBy }) {
+  return request(`/api/dp/projects/${projectId}/bid_packages/${packageId}/selection`, {
+    method: 'POST',
+    body: JSON.stringify({ requested_by: requestedBy })
+  })
+}
+
+export async function dpFetchSpecsBatch({ projectId, projectProductIds }) {
+  return request(`/api/dp/projects/${projectId}/specs/batch`, {
+    method: 'POST',
+    body: JSON.stringify({ project_product_ids: projectProductIds || [] })
+  })
 }
 
 export async function deleteProject(projectId) {

@@ -2,6 +2,18 @@ module BidCollections
   module Routes
     def self.draw(router)
       router.namespace :api, defaults: { format: :json } do
+        # Standalone-mode proxy to DP v2 bid_collections endpoints (browser-safe).
+        router.post 'dp/context', to: 'dp_proxy#context'
+        router.get 'dp/projects/:project_id/bid_packages', to: 'dp_proxy#bid_packages'
+        router.post 'dp/projects/:project_id/bid_packages/:package_id/selection', to: 'dp_proxy#selection'
+        router.post 'dp/projects/:project_id/specs/batch', to: 'dp_proxy#specs_batch'
+
+        # DP (DesignerPages / host app) integration endpoints.
+        router.post :context, to: 'dp/context#create'
+        router.get 'projects/:project_id/bid_packages', to: 'dp/bid_packages#index'
+        router.post 'projects/:project_id/bid_packages/sync', to: 'dp/bid_packages#sync'
+        router.get 'sync/:sync_id', to: 'dp/sync#show'
+
         router.scope module: :admin do
           router.resources :projects, only: [:index, :create, :destroy]
 
