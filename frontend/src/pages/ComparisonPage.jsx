@@ -481,6 +481,8 @@ export default function ComparisonPage({
   const [analysisModal, setAnalysisModal] = useState(null)
   const [analysisBusy, setAnalysisBusy] = useState(false)
   const [activeAnalysisPanel, setActiveAnalysisPanel] = useState(null)
+  const [analysisToastMessage, setAnalysisToastMessage] = useState('')
+  const analysisToastTimeoutRef = useRef(null)
   const [fullscreenRequiredApprovalColumns, setFullscreenRequiredApprovalColumns] = useState(() => (
     Array.isArray(fullscreenApprovalSnapshot?.requiredApprovalColumns)
       ? fullscreenApprovalSnapshot.requiredApprovalColumns
@@ -2054,6 +2056,24 @@ export default function ComparisonPage({
     const topVolatilityRows = topAnomalies
       .filter((row) => (row.spreadPct || 0) >= spreadGate || (row.spreadVsMedian || 0) >= 0.9)
       .slice(0, 8)
+    const bestPriceWinCounts = visibleDealers.map((dealer) => {
+      const wins = scopedRows.filter((row) => {
+        const prices = visibleDealers
+          .map((entry) => {
+            const cell = (row.dealers || []).find((candidate) => candidate.invite_id === entry.invite_id)
+            return numberOrNull(effectiveExtendedAmount(row, cell))
+          })
+          .filter((price) => price != null)
+        const bidderCell = (row.dealers || []).find((entry) => entry.invite_id === dealer.invite_id)
+        const bidderPrice = numberOrNull(effectiveExtendedAmount(row, bidderCell))
+        return bidderPrice != null && prices.length > 0 && bidderPrice === Math.min(...prices)
+      }).length
+      return {
+        label: String(dealer.dealer_email || '').trim() || dealerDisplayLabel(dealer.dealer_name, dealer.dealer_email),
+        wins,
+        of: scopedRows.length
+      }
+    })
 
     const flaggedRowCount = winnerAuditRows.length
     const priorityRows = topWinnerAuditRows.slice(0, 5).map((row) => row.codeTag)
@@ -2089,13 +2109,17 @@ export default function ComparisonPage({
       lowest_bid: row.minBid?.extended ?? null
     }))
 
-    const followUpSection = [
-      'Confirm scope and components for flagged rows',
-      quantityMismatchCount > 0
-        ? 'Verify quantities and units align across bidders'
-        : 'Verify pricing assumptions are aligned',
-      'Recompute totals after clarification'
-    ].slice(0, 3)
+    const deterministicWatchOut = (() => {
+      const topLeaderRow = topWinnerAuditRows[0]
+      if (topLeaderRow?.codeTag && Number.isFinite(topLeaderRow?.impact) && leader?.label) {
+        return `${topLeaderRow.codeTag} stands out in ${leader.label}'s bid with ${money(topLeaderRow.impact)} of row impact.`
+      }
+      const topVarianceRow = topVolatilityRows[0]
+      if (topVarianceRow?.codeTag && Number.isFinite(topVarianceRow?.impact)) {
+        return `${topVarianceRow.codeTag} has ${money(topVarianceRow.impact)} between the low and high bids.`
+      }
+      return ''
+    })()
 
     const memoMetrics = []
     if (leader && runnerUp && leaderGapDollar != null) {
@@ -2216,11 +2240,12 @@ export default function ComparisonPage({
         clearWinner,
         closeTopTier
       },
+      best_price_win_counts: bestPriceWinCounts,
       leader: leaderSection,
       leader_review: leaderReviewSection,
       high_variance_rows: highVarianceRows,
       high_variance_items: highVarianceItems,
-      follow_up: followUpSection,
+      watch_out: deterministicWatchOut,
       flagged_row_count: flaggedRowCount,
       priority_row_count: priorityRowCount,
       priority_rows: priorityRows,
@@ -2232,6 +2257,8 @@ export default function ComparisonPage({
 
   const openBidResponseAnalysis = async () => {
     if (analysisBusy || isAwardedWorkspace) return
+    if (analysisToastTimeoutRef.current) clearTimeout(analysisToastTimeoutRef.current)
+    setAnalysisToastMessage('')
     setAnalysisBusy(true)
     try {
       const deterministicReport = runBidResponseAnalysis()
@@ -2257,12 +2284,17 @@ export default function ComparisonPage({
               : deterministicReport.leader_review,
             high_variance_rows: deterministicReport.high_variance_rows,
             high_variance_items: deterministicReport.high_variance_items,
-            follow_up: Array.isArray(aiPayload?.follow_up) && aiPayload.follow_up.length > 0
-              ? aiPayload.follow_up
-              : deterministicReport.follow_up
+            watch_out: typeof aiPayload?.watch_out === 'string' && aiPayload.watch_out.trim()
+              ? aiPayload.watch_out.trim()
+              : deterministicReport.watch_out
           }
-        } catch (_error) {
+        } catch (error) {
           nextReport = { ...deterministicReport, source: 'deterministic-fallback' }
+          const message = error instanceof Error && error.message
+            ? `AI analysis did not complete. Showing a fresh local analysis instead. (${error.message})`
+            : 'AI analysis did not complete. Showing a fresh local analysis instead.'
+          setAnalysisToastMessage(message)
+          analysisToastTimeoutRef.current = setTimeout(() => setAnalysisToastMessage(''), 4200)
         }
       }
       setAnalysisModal(normalizeBidAnalysisReport(nextReport))
@@ -2307,13 +2339,19 @@ export default function ComparisonPage({
             }))
             .filter((item) => item.code_tag)
         : [],
-      follow_up: normalizeLines(report?.follow_up, ['Confirm scope alignment for any flagged rows'], 3)
+      watch_out: String(report?.watch_out || report?.follow_up?.[0] || '').trim()
     }
   }
 
   useEffect(() => {
     if (!analysisModal) setActiveAnalysisPanel(null)
   }, [analysisModal])
+
+  useEffect(() => (
+    () => {
+      if (analysisToastTimeoutRef.current) clearTimeout(analysisToastTimeoutRef.current)
+    }
+  ), [])
 
   const normalizeAnalysisReason = (value) => {
     const text = String(value || '').toLowerCase()
@@ -2390,9 +2428,10 @@ export default function ComparisonPage({
     return Array.from(new Set(rows.map((row) => String(row?.codeTag || '').trim()).filter(Boolean))).slice(0, 5)
   }, [analysisModal])
 
-  const leaderSummaryLine = useMemo(() => {
-    const line = Array.isArray(analysisModal?.leader) ? analysisModal.leader[0] : ''
-    return String(line || '').trim() || 'No clear leader based on current comparable totals'
+  const leaderLines = useMemo(() => {
+    const lines = Array.isArray(analysisModal?.leader) ? analysisModal.leader : []
+    const normalized = lines.map((line) => String(line || '').trim()).filter(Boolean)
+    return normalized.length > 0 ? normalized : ['No clear leader based on current comparable totals']
   }, [analysisModal])
 
   const leaderReviewSummaryLine = useMemo(() => {
@@ -2407,9 +2446,44 @@ export default function ComparisonPage({
     return firstLine || 'A small number of rows in the leading bid stand out'
   }, [analysisModal])
 
-  const followUpLines = useMemo(() => {
-    const lines = Array.isArray(analysisModal?.follow_up) ? analysisModal.follow_up : []
-    return lines.map((line) => String(line || '').trim()).filter(Boolean).slice(0, 2)
+  const watchOutLine = useMemo(() => {
+    const text = String(analysisModal?.watch_out || '').trim()
+    return text
+  }, [analysisModal])
+
+  const analysisContextLine = useMemo(() => {
+    if (!analysisModal) return ''
+    const generatedAt = analysisModal?.generatedAt ? new Date(analysisModal.generatedAt) : null
+    const generatedLabel = generatedAt && !Number.isNaN(generatedAt.getTime())
+      ? generatedAt.toLocaleString([], {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          second: '2-digit'
+        })
+      : null
+    if (analysisModal?.source === 'deterministic-fallback') {
+      return generatedLabel
+        ? `AI synthesis did not complete. Showing a fresh local analysis generated at ${generatedLabel}.`
+        : 'AI synthesis did not complete. Showing a fresh local analysis.'
+    }
+    if (generatedLabel) return `Generated from current comparison data at ${generatedLabel}.`
+    return ''
+  }, [analysisModal])
+
+  const analysisVerificationMessage = useMemo(() => {
+    if (!analysisModal) return ''
+    if (analysisModal?.source === 'ai') {
+      return analysisModal?.model
+        ? `AI rewrite completed successfully using ${analysisModal.model}.`
+        : 'AI rewrite completed successfully.'
+    }
+    if (analysisModal?.source === 'deterministic-fallback') {
+      return 'AI rewrite failed, so this modal is showing the freshly processed local analysis.'
+    }
+    return 'This modal is showing the freshly processed local analysis.'
   }, [analysisModal])
 
   const toggleLeaderPanel = () => {
@@ -4314,9 +4388,19 @@ export default function ComparisonPage({
             </div>
 
             <section className="bid-analysis-section">
+              {analysisVerificationMessage || analysisContextLine ? (
+                <div className={`bid-analysis-status-card ${analysisModal?.source === 'ai' ? 'is-ai' : 'is-local'}`.trim()}>
+                  {analysisVerificationMessage ? <p className="bid-analysis-status-line">{analysisVerificationMessage}</p> : null}
+                  {analysisContextLine ? <p className="bid-analysis-context-line">{analysisContextLine}</p> : null}
+                </div>
+              ) : null}
               <h4>Leader</h4>
               <div className="bid-analysis-leader-row">
-                <p className="bid-analysis-compact-line">{leaderSummaryLine}</p>
+                <div className="bid-analysis-compact-copy">
+                  {leaderLines.map((line, index) => (
+                    <p key={`analysis-leader-line-${index}`} className="bid-analysis-compact-line">{line}</p>
+                  ))}
+                </div>
                 <button
                   type="button"
                   className="btn bid-analysis-why-btn"
@@ -4425,16 +4509,14 @@ export default function ComparisonPage({
                 </div>
               ) : null}
 
-              <h4>Follow Up</h4>
-              <ul className="bid-analysis-summary-list">
-                {followUpLines.map((line, idx) => (
-                  <li key={`analysis-follow-up-${idx}`}>{line}</li>
-                ))}
-              </ul>
+              <h4>Watch Out</h4>
+              <p className="bid-analysis-compact-line">{watchOutLine}</p>
             </section>
           </div>
         </div>
       ) : null}
+
+      {analysisToastMessage ? <div className="floating-toast">{analysisToastMessage}</div> : null}
 
       {unapproveModal ? (
         <div className="modal-backdrop" onClick={closeUnapproveModal}>
